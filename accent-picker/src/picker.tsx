@@ -255,7 +255,7 @@ function AccentPicker() {
         </button>
       </div>
 
-      <div className="grid grid-cols-8 gap-1">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, minmax(0, 1fr))', gap: '4px' }}>
         {SWATCHES.map(swatch => (
           <button
             className="size-5 rounded-sm border border-(--dt-border)"

@@ -193,7 +193,7 @@ function AccentPicker() {
         }
       )
     ] }),
-    /* @__PURE__ */ jsx("div", { className: "grid grid-cols-8 gap-1", children: SWATCHES.map((swatch) => /* @__PURE__ */ jsx(
+    /* @__PURE__ */ jsx("div", { style: { display: "grid", gridTemplateColumns: "repeat(8, minmax(0, 1fr))", gap: "4px" }, children: SWATCHES.map((swatch) => /* @__PURE__ */ jsx(
       "button",
       {
         className: "size-5 rounded-sm border border-(--dt-border)",
