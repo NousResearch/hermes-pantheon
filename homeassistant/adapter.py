@@ -117,6 +117,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         self._ignore_entities: Set[str] = set(extra.get("ignore_entities", []))
         self._watch_all: bool = bool(extra.get("watch_all", False))
         self._cooldown_seconds: int = int(extra.get("cooldown_seconds", 30))
+        self._ws_heartbeat: int = int(extra.get("heartbeat", os.getenv("HASS_WS_HEARTBEAT", "30") or 30))
         self._last_event_time: Dict[str, float] = {}  # entity_id -> last event ts
 
     def _next_id(self) -> int:
@@ -165,7 +166,11 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         """Open the WebSocket, authenticate, and subscribe to ``state_changed``."""
         ws_url = self._hass_url.replace("https://", "wss://").replace("http://", "ws://")
         self._session = self._new_session()
-        self._ws = await self._session.ws_connect(f"{ws_url}/api/websocket", heartbeat=30, timeout=30)
+        self._ws = await self._session.ws_connect(
+            f"{ws_url}/api/websocket",
+            heartbeat=self._ws_heartbeat if self._ws_heartbeat > 0 else None,
+            timeout=30,
+        )
         msg = await self._ws.receive_json()
         if msg.get("type") != "auth_required":
             return await self._handshake_failed("Expected auth_required, got: %s", msg.get("type"))
@@ -241,6 +246,8 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             return
         async for ws_msg in self._ws:
             if ws_msg.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                if ws_msg.type == aiohttp.WSMsgType.ERROR and ws_msg.data:
+                    logger.warning("[%s] HA WebSocket error: %s", self.name, ws_msg.data)
                 break
             if ws_msg.type != aiohttp.WSMsgType.TEXT:
                 continue
