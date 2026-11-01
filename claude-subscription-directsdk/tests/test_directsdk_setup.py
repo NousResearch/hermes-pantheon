@@ -45,6 +45,16 @@ def test_path_and_explicit_commands_take_precedence_over_the_probe(tmp_path):
     assert _resolve(["custom-claude-wrapper"], env) is None
 
 
+@pytest.mark.parametrize("home", ["", "relative-home"])
+def test_relative_home_does_not_discover_cwd_binary(tmp_path, monkeypatch, home):
+    from directsdk_setup import _resolve
+
+    _install(tmp_path / home / ".local/bin")
+    monkeypatch.chdir(tmp_path)
+    resolved = _resolve(["claude"], {"HOME": home, "USERPROFILE": home, "PATH": str(tmp_path / "empty")})
+    assert resolved is None or os.path.isabs(resolved[0])
+
+
 def test_core_finds_a_cli_that_is_only_in_an_install_prefix(tmp_path, monkeypatch):
     """Core checks `process_command` with a PATH-only which() before the plugin runs (#32): the agent build of a
     service-launched backend must not fail with "Could not find ... CLI command 'claude'"."""

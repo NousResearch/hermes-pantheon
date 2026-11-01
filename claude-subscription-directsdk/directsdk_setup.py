@@ -37,7 +37,8 @@ _SYSTEM_PREFIXES = ("/opt/homebrew/bin", "/usr/local/bin")
 
 def _install_prefixes(env):
     home = env.get("USERPROFILE" if os.name == "nt" else "HOME")
-    prefixes = [os.path.join(home, prefix) for prefix in _HOME_PREFIXES] if home else []
+    # A relative HOME would resolve against the cwd and could run a binary planted there.
+    prefixes = [os.path.join(home, prefix) for prefix in _HOME_PREFIXES] if home and os.path.isabs(home) else []
     return prefixes + ([] if os.name == "nt" else list(_SYSTEM_PREFIXES))
 
 
