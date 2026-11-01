@@ -787,7 +787,15 @@ class Client:
                 mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
                 env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
-                    conflicts = [key for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY') if env.get(key)]
+                    # API-key credentials inherited from Hermes' environment (e.g. for the
+                    # core anthropic provider) must not leak into the Claude Code child, or
+                    # it would sign in with the API key instead of the subscription.  Dropping
+                    # them here keeps the key usable by the anthropic provider while the turn
+                    # runs on the subscription.  Endpoint and backend redirects are different:
+                    # they change where requests go, so they stay refused.
+                    for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_FOUNDRY_API_KEY'):
+                        env.pop(key, None)
+                    conflicts = [key for key in ('ANTHROPIC_BASE_URL',) if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:
                         raise ValueError('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
@@ -799,6 +807,20 @@ class Client:
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)
+                # Drop the host Claude Code session identity so native does not inject a
+                # per-process scratchpad path (with a random UUID) into messages[1],
+                # which would break the prompt cache on every request. (#150)
+                _HOST_SESSION_ENV = (
+                    'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS',
+                    'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
+                    'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+                    'CLAUDE_CODE_DESKTOP_APP_VERSION', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_ACCOUNT_UUID',
+                    'CLAUDE_CODE_ORGANIZATION_UUID', 'CLAUDE_CODE_USER_EMAIL', 'CLAUDE_CODE_OAUTH_SCOPES',
+                    'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH', 'CLAUDE_PID',
+                )
+                for key in list(env):
+                    if key in _HOST_SESSION_ENV or key.startswith('CLAUDE_AGENT_SDK_'):
+                        env.pop(key, None)
                 env.update(ENABLE_TOOL_SEARCH='false', CLAUDE_CODE_MAX_RETRIES='0', DISABLE_AUTO_COMPACT='1', DISABLE_COMPACT='1')
                 # Telemetry and feature flags follow the user's claude_code_telemetry setting, read per spawn.
                 apply_traffic_policy(env)
