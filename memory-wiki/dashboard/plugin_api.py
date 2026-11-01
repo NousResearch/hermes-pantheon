@@ -61,22 +61,27 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(int(value), high))
 
 
-def _with_db(label: str, fn, *, empty):
-    """Run ``fn(db)`` against a read-only DB, mapping a missing DB to *empty* and any failure
-    to a 500 with the failure logged (the dashboard shows the label, never the traceback)."""
-    try:
-        db = _open_db()
-        if db is None:
-            return empty
+async def _with_db(label: str, fn, *, empty):
+    """Run ``fn(db)`` against a read-only DB without blocking the event loop: the scan is
+    CPU/GIL-bound and large histories would otherwise starve the gateway (memory-wiki #216)."""
+    import asyncio
+
+    def _run():
         try:
-            return fn(db)
-        finally:
-            db.close()
-    except HTTPException:
-        raise
-    except Exception:
-        _log.exception("memory-wiki %s failed", label)
-        raise HTTPException(status_code=500, detail=f"Memory wiki {label} failed")
+            db = _open_db()
+            if db is None:
+                return empty
+            try:
+                return fn(db)
+            finally:
+                db.close()
+        except HTTPException:
+            raise
+        except Exception:
+            _log.exception("memory-wiki %s failed", label)
+            raise HTTPException(status_code=500, detail=f"Memory wiki {label} failed")
+
+    return await asyncio.to_thread(_run)
 
 
 @router.get("/overview")
@@ -85,7 +90,7 @@ async def get_overview(subject_limit: int = 50, day_limit: int = 30):
     subject_limit = _clamp(subject_limit, 1, 200)
     day_limit = _clamp(day_limit, 1, 120)
     empty = {"subjects": [], "daily_logs": [], "recent_sessions": [], "notes": core.build_memory_notes()}
-    return _with_db(
+    return await _with_db(
         "overview",
         lambda db: core.build_memory_overview(db, subject_limit=subject_limit, day_limit=day_limit),
         empty=empty,
@@ -97,7 +102,7 @@ async def get_subjects(q: str = "", limit: int = 100):
     core = _core()
     safe_limit = _clamp(limit, 1, 500)
     query = q.strip()
-    subjects = _with_db(
+    subjects = await _with_db(
         "subjects",
         lambda db: core.build_memory_subjects(db, limit=safe_limit, query=query or None),
         empty=[],
@@ -108,7 +113,7 @@ async def get_subjects(q: str = "", limit: int = 100):
 @router.get("/subjects/{slug}")
 async def get_subject(slug: str):
     core = _core()
-    subject = _with_db("subject", lambda db: core.get_memory_subject(db, slug), empty=None)
+    subject = await _with_db("subject", lambda db: core.get_memory_subject(db, slug), empty=None)
     if subject is None:
         raise HTTPException(status_code=404, detail="Memory subject not found")
     return {"subject": subject}
@@ -118,14 +123,14 @@ async def get_subject(slug: str):
 async def get_days(limit: int = 60):
     core = _core()
     safe_limit = _clamp(limit, 1, 365)
-    daily_logs = _with_db("days", lambda db: core.build_daily_logs(db, limit_days=safe_limit), empty=[])
+    daily_logs = await _with_db("days", lambda db: core.build_daily_logs(db, limit_days=safe_limit), empty=[])
     return {"daily_logs": daily_logs, "limit": safe_limit}
 
 
 @router.get("/days/{date}")
 async def get_day(date: str):
     core = _core()
-    daily_log = _with_db("day", lambda db: core.get_daily_log(db, date), empty=None)
+    daily_log = await _with_db("day", lambda db: core.get_daily_log(db, date), empty=None)
     if daily_log is None:
         raise HTTPException(status_code=404, detail="Memory day not found")
     return {"daily_log": daily_log}
