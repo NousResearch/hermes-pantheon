@@ -117,6 +117,9 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         self._ignore_entities: Set[str] = set(extra.get("ignore_entities", []))
         self._watch_all: bool = bool(extra.get("watch_all", False))
         self._cooldown_seconds: int = int(extra.get("cooldown_seconds", 30))
+        # A stable ID updates one HA notification instead of accumulating routine replies.
+        # An explicit empty value preserves HA's default create-a-new behavior.
+        self._notification_id: str = str(extra.get("notification_id", "hermes_agent"))
         self._last_event_time: Dict[str, float] = {}  # entity_id -> last event ts
 
     def _next_id(self) -> int:
@@ -310,6 +313,8 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         """
         url = f"{self._hass_url}/api/services/persistent_notification/create"
         payload = {"title": NOTIFICATION_TITLE, "message": content[:self.MAX_MESSAGE_LENGTH]}
+        if self._notification_id:
+            payload["notification_id"] = self._notification_id
 
         async def _post(session) -> SendResult:
             async with session.post(

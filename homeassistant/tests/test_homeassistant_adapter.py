@@ -303,7 +303,36 @@ class TestSendViaRestApi:
         assert "/api/services/persistent_notification/create" in call_args[0][0]
         assert call_args[1]["json"]["title"] == NOTIFICATION_TITLE == "Hermes Agent"
         assert call_args[1]["json"]["message"] == "Test notification"
+        assert call_args[1]["json"]["notification_id"] == "hermes_agent"
         assert "Bearer tok" in call_args[1]["headers"]["Authorization"]
+
+    @pytest.mark.asyncio
+    async def test_send_uses_configured_notification_id(self):
+        adapter = _make_adapter(notification_id="hermes_agent_homeassistant_events")
+        mock_session = self._mock_aiohttp_session(200)
+
+        with patch("homeassistant_plugin.adapter.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession = MagicMock(return_value=mock_session)
+            mock_aiohttp.ClientTimeout = lambda total: total
+
+            result = await adapter.send("ha_events", "Test notification")
+
+        assert result.success is True
+        assert mock_session.post.call_args[1]["json"]["notification_id"] == "hermes_agent_homeassistant_events"
+
+    @pytest.mark.asyncio
+    async def test_send_omits_empty_notification_id(self):
+        adapter = _make_adapter(notification_id="")
+        mock_session = self._mock_aiohttp_session(200)
+
+        with patch("homeassistant_plugin.adapter.aiohttp") as mock_aiohttp:
+            mock_aiohttp.ClientSession = MagicMock(return_value=mock_session)
+            mock_aiohttp.ClientTimeout = lambda total: total
+
+            result = await adapter.send("ha_events", "Test notification")
+
+        assert result.success is True
+        assert "notification_id" not in mock_session.post.call_args[1]["json"]
 
 
 # ---------------------------------------------------------------------------
