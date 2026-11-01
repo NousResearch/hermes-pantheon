@@ -45,12 +45,17 @@ def _sandbox():
 def _file_tools_bypass_sandbox() -> bool:
     """Whether Hermes' file tools skip this sandbox and touch files from the Hermes process itself.
 
-    Core gives ``read_file``, ``write_file``, ``patch`` and ``search_files`` an in-process path (Python
-    reads and writes, ripgrep spawned directly) on any POSIX ``LocalEnvironment``, which
-    ``BubblewrapEnvironment`` is; ``HERMES_NATIVE_FILE_READ`` off sends every file operation through
-    ``env.execute``, so into the sandbox (``ShellFileOperations._native_read_enabled`` in
-    ``tools/file_operations.py``, same parse).
+    Current core consults the backend's filesystem capability, so file tools use this sandbox's
+    view even with native file I/O enabled. Older cores classify every ``LocalEnvironment`` as
+    host-backed; retain their ``HERMES_NATIVE_FILE_READ`` switch in the prompt notice.
     """
+    try:
+        from tools.environments.base import env_uses_host_filesystem
+    except ImportError:
+        pass
+    else:
+        if not env_uses_host_filesystem(_sandbox().BubblewrapEnvironment):
+            return False
     return os.environ.get("HERMES_NATIVE_FILE_READ", "1").strip().lower() not in ("0", "false", "no", "off")
 
 

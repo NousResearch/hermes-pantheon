@@ -85,6 +85,33 @@ def _no_spawn(monkeypatch):
 
 
 class TestFactory:
+    def test_file_tools_resolve_ripgrep_in_the_command_namespace(self, work_dir, monkeypatch):
+        from tools import file_operations_search
+        from tools.file_operations import ShellFileOperations
+        from tools.file_operations_common import ExecuteResult
+
+        def host_ripgrep():
+            raise AssertionError("the bundled host ripgrep may be hidden inside bwrap")
+
+        monkeypatch.setattr(file_operations_search, "_bundled_rg", host_ripgrep)
+        monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
+        with _no_spawn(monkeypatch):
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
+        try:
+            ops = ShellFileOperations(env)
+            commands = []
+
+            def probe(command, **kwargs):
+                commands.append(command)
+                return ExecuteResult(stdout="/usr/bin/rg\n", exit_code=0)
+
+            monkeypatch.setattr(ops, "_exec", probe)
+            assert ops._resolve_command("rg") == "/usr/bin/rg"
+            assert commands == ["command -v rg 2>/dev/null"]
+            assert ops._native_read_enabled() is False
+        finally:
+            env.cleanup()
+
     def test_factory_returns_bubblewrap_environment_with_cwd_timeout_and_config(self, isolated_tool, work_dir,
                                                                                  monkeypatch, bwrap_provider):
         _provider, settings = bwrap_provider
@@ -153,7 +180,7 @@ class TestFactory:
 
 @needs_bwrap
 class TestToolIntegration:
-    def test_terminal_creates_a_file_and_read_file_returns_it_via_the_host_path(self, isolated_tool, work_dir):
+    def test_terminal_creates_a_file_and_read_file_returns_it_via_the_sandbox(self, isolated_tool, work_dir):
         from tools.file_tools import read_file_tool
 
         task_id = "host-path"
@@ -170,12 +197,9 @@ class TestToolIntegration:
         assert "hello" in read_file_tool(str(host_file), task_id=task_id)
 
     @pytest.mark.parametrize("native", ["1", "0"])
-    def test_file_tools_reach_past_the_sandbox_only_on_the_native_path(self, isolated_tool, tmp_path, monkeypatch,
-                                                                        native):
-        """The prompt note's claim, live: with core's in-process file path (the default) the file tools
-        write and read a path outside the writable set that a command cannot write; with
-        HERMES_NATIVE_FILE_READ=0 they run through the sandbox and get the same refusal."""
-        from tools.file_tools import read_file_tool, write_file_tool
+    def test_file_tools_use_the_sandbox_view_even_with_native_io_enabled(self, isolated_tool, work_dir, tmp_path,
+                                                                       monkeypatch, native):
+        from tools.file_tools import patch_tool, read_file_tool, write_file_tool
 
         monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
         outside = tmp_path / "outside"
@@ -185,13 +209,54 @@ class TestToolIntegration:
         r = json.loads(isolated_tool.terminal_tool(f"printf cmd > {target}", task_id=task_id))
         assert r["exit_code"] != 0 and "Read-only file system" in r["output"], r
         w = json.loads(write_file_tool(str(target), "FILE-TOOL\n", task_id=task_id))
-        if native == "1":
-            assert w.get("bytes_written") == 10, w
-            assert target.read_text() == "FILE-TOOL\n"
-            assert "FILE-TOOL" in read_file_tool(str(target), task_id=task_id)
+        assert "Read-only file system" in w.get("error", ""), w
+        assert not target.exists()
+        project_file = work_dir / "roundtrip.txt"
+        written = json.loads(write_file_tool(str(project_file), "before\n", task_id=task_id))
+        assert not written.get("error"), written
+        assert "before" in read_file_tool(str(project_file), task_id=task_id)
+        patched = json.loads(patch_tool(path=str(project_file), old_string="before", new_string="after",
+                                       task_id=task_id))
+        assert not patched.get("error"), patched
+        assert project_file.read_text() == "after\n"
+
+    @pytest.mark.parametrize("native", ["1", "0"])
+    @pytest.mark.parametrize("target,pattern", [("content", "needle"), ("files", "*.txt")])
+    @pytest.mark.parametrize("has_rg", [True, False], ids=["ripgrep", "find-grep-fallback"])
+    def test_search_ignores_the_hidden_host_ripgrep(self, isolated_tool, work_dir, tmp_path, monkeypatch,
+                                                 native, target, pattern, has_rg):
+        from tools import file_operations_search
+        from tools.file_tools import search_tool
+
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
+        (work_dir / "match.txt").write_text("needle\n")
+        pinned = tmp_path / ".hermes" / "managed" / "rg"
+        pinned.parent.mkdir(parents=True)
+        pinned.write_text("#!/bin/sh\necho wrong-host-ripgrep >&2\nexit 126\n")
+        pinned.chmod(0o755)
+        monkeypatch.setattr(file_operations_search, "_bundled_rg", lambda: str(pinned))
+        task_id = f"search-{native}-{target}-{has_rg}"
+        r = json.loads(isolated_tool.terminal_tool("true", task_id=task_id))
+        assert r["exit_code"] == 0, r
+        env = get_active_env(task_id)
+        assert env.execute(f"test -x {pinned}")["returncode"] != 0
+        if has_rg:
+            assert env.execute("command -v rg")["returncode"] == 0, "this case requires sandbox-visible rg"
         else:
-            assert "Read-only file system" in w.get("error", ""), w
-            assert not target.exists()
+            execute = env.execute
+
+            def without_rg(command, **kwargs):
+                if command == "command -v rg 2>/dev/null":
+                    return {"output": "", "returncode": 1}
+                return execute(command, **kwargs)
+
+            monkeypatch.setattr(env, "execute", without_rg)
+        found = json.loads(search_tool(pattern, target=target, path=str(work_dir), task_id=task_id))
+        assert not found.get("error"), found
+        if target == "content":
+            assert [m["path"] for m in found.get("matches", [])] == [str(work_dir / "match.txt")], found
+        else:
+            assert found.get("files") == [str(work_dir / "match.txt")], found
 
     def test_ca_bundle_under_hermes_home_is_readable_inside_the_sandbox(self, isolated_tool, tmp_path, monkeypatch):
         """SSL_CERT_FILE pointing into the hidden HERMES_HOME (where hermes puts certifi's bundle) must

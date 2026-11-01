@@ -1192,6 +1192,10 @@ class BubblewrapEnvironment(LocalEnvironment):
     their removal on cleanup.
     """
 
+    # Host paths do not imply the host's filesystem view: HERMES_HOME is hidden,
+    # scratch paths are remapped, and executables must be resolved inside bwrap.
+    uses_host_filesystem = False
+
     def __init__(
         self,
         cwd: str = "",

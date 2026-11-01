@@ -109,20 +109,29 @@ class TestDiscovery:
         monkeypatch.setenv("TERMINAL_ENV", "local")
         assert "bubblewrap-sandbox" not in {s.id for s in manager.render_system_prompt_sections({})}
 
-    def test_prompt_note_says_where_the_file_tools_run(self, discovered, monkeypatch):
-        # Core's in-process file path (on for a LocalEnvironment subclass unless HERMES_NATIVE_FILE_READ
-        # is off) decides whether the file tools are confined; the note must say which case applies.
+    @pytest.mark.parametrize("native", [None, "1", "0"])
+    def test_prompt_note_says_where_the_file_tools_run(self, discovered, monkeypatch, native):
         manager, _provider = discovered({})
         monkeypatch.setenv("TERMINAL_ENV", "bubblewrap")
-        monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
-        note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
-        assert "`search_files` do not run in this sandbox" in note
-        assert "hidden or read-only for commands" in note
-        assert "($TMPDIR) is not the same directory for them" in note
-        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "0")
+        if native is None:
+            monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
+        else:
+            monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
         note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
         assert "`search_files` run through this sandbox too" in note
         assert "do not run in this sandbox" not in note
+
+    @pytest.mark.parametrize("native,bypasses", [("1", True), ("0", False)])
+    def test_legacy_core_prompt_follows_native_file_setting(self, discovered, monkeypatch, native, bypasses):
+        from tools.environments import base
+
+        manager, _provider = discovered({})
+        monkeypatch.delattr(base, "env_uses_host_filesystem")
+        monkeypatch.setenv("TERMINAL_ENV", "bubblewrap")
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
+        note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
+        assert ("`search_files` do not run in this sandbox" in note) is bypasses
+        assert ("`search_files` run through this sandbox too" in note) is not bypasses
 
     def test_bad_settings_name_the_setting(self, discovered):
         _manager, provider = discovered({"memory_mb": "lots"})
