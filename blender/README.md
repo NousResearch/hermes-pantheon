@@ -13,7 +13,9 @@ hermes plugins install blender
 hermes plugins enable blender
 ```
 
-Choose the destination profile with the global `hermes -p <profile>` option. Catalog installation by the short name `blender` becomes available only after its catalog entry is merged and published.
+This installs plugin 0.1.0 from the Hermes plugin catalog. Installing straight from this repository (`hermes plugins install NousResearch/hermes-plugin-blender`) installs 0.2.0, which needs a Hermes release that includes NousResearch/hermes-agent#134050 (location lists in `app:` declarations); released Hermes up to the current release refuses it with `app.win32.location is required` on every OS.
+
+Choose the destination profile with the global `hermes -p <profile>` option.
 
 ## Prerequisites
 
