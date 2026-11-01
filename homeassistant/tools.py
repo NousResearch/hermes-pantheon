@@ -18,6 +18,7 @@ devices through the WebSocket registries, so ``area`` filters work even when
 an entity's name does not mention its room.
 """
 
+from datetime import datetime, timezone
 import asyncio
 import fnmatch
 import json
@@ -566,11 +567,25 @@ async def _async_list_entities(
         max_entities=max_entities, entity_area=entity_area, entity_device=entity_device)
 
 
+def _ha_timestamp_to_local(value: Any) -> Any:
+    """Convert a Home Assistant UTC ISO timestamp to the host's local time."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().isoformat()
+    except (ValueError, TypeError):
+        return value
+
+
 async def _async_get_state(entity_id: str) -> Dict[str, Any]:
     data = await _api_json("GET", f"/api/states/{entity_id}", 10)
     return {
         "entity_id": data["entity_id"], "state": data["state"], "attributes": data.get("attributes", {}),
-        "last_changed": data.get("last_changed"), "last_updated": data.get("last_updated")}
+        "last_changed": _ha_timestamp_to_local(data.get("last_changed")),
+        "last_updated": _ha_timestamp_to_local(data.get("last_updated"))}
 
 
 def _build_service_payload(entity_id: Optional[str] = None, data: Optional[Dict[str, Any]] = None) -> Dict:
@@ -651,10 +666,23 @@ async def _async_call_service(
                 f"of their own domain — call {actual_domain}.{service} instead."
             )
             return out
-        # Exists in the right domain: the state was already as requested — intent satisfied.
+        # HA returns an empty list for radio/physical devices whose state flips only after
+        # the device confirms (150-300 ms later): the service call itself succeeded, so do
+        # not claim "already in state" from a pre-call reading. Only report a true no-op
+        # when the observed state matches the state the service was asked to set.
+        requested_state = {"turn_on": "on", "turn_off": "off"}.get(service)
+        observed = state.get("state")
         out["success"] = True
         del out["error"]
-        out["note"] = f"{entity_id} was already in state '{state['state']}' — nothing to change."
+        if requested_state is not None and observed == requested_state:
+            out["note"] = f"{entity_id} was already in state '{observed}' — nothing to change."
+        elif requested_state is not None:
+            out["note"] = (
+                f"{entity_id} accepted {domain}.{service}; device state is still transitioning "
+                f"(currently '{observed}')."
+            )
+        else:
+            out["note"] = f"{entity_id} accepted {domain}.{service} (no changed-state reported)."
     return out
 
 
