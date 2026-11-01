@@ -91,7 +91,7 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
 
     def get_usage_cost(self, model, usage):
         from decimal import Decimal, InvalidOperation
-        from agent.usage_pricing import CostResult, format_cost_label
+        from agent.usage_pricing import CostResult
 
         native = (usage.raw_usage or {}).get('native_cost') or {}
         unknown = CostResult(amount_usd=None, status='unknown', source='none', label='n/a',
@@ -106,8 +106,18 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
             return unknown
         if not amount.is_finite() or amount < 0:
             return unknown
-        return CostResult(amount_usd=amount, status='estimated', source='provider_cost_api',
-                          label=format_cost_label(amount), notes=('native API list-price equivalent; not subscription invoice; extra usage unknown',))
+        # Subscription-included (Claude Max): out-of-pocket is $0, and `amount` is native's
+        # LIST-PRICE equivalent — an allowance gauge, never an invoice. It rides
+        # `list_price_usd` so spend consumers summing amount_usd stay truthful.
+        included_notes = ('subscription-included (Claude Max); list_price_usd is the native API '
+                          'list-price equivalent, not an invoice',)
+        try:
+            return CostResult(amount_usd=Decimal(0), status='included', source='subscription_included',
+                              label='included', list_price_usd=amount, notes=included_notes)
+        except TypeError:
+            # Older core CostResult lacks list_price_usd: still included/$0, gauge dropped.
+            return CostResult(amount_usd=Decimal(0), status='included', source='subscription_included',
+                              label='included', notes=included_notes)
 
     def create_client(self, **client_kwargs):
         try:

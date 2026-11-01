@@ -88,9 +88,12 @@ def test_native_alias_metadata_is_bounded_and_never_claims_subscription_invoice(
                 "native_cost": {"total_cost_usd": .012345, "modelUsage": {"claude-sonnet-5": {"costBasis": "list"}}}}
     usage = normalize_usage(reported, provider=profile.name)
     cost = estimate_usage_cost("sonnet", usage, provider=profile.name, base_url=profile.base_url)
-    assert cost.amount_usd == Decimal("0.012345")
-    assert cost.status == "estimated"
-    assert any("not subscription invoice" in note for note in cost.notes)
+    # Subscription-included (Claude Max): $0 out-of-pocket, native list price on the gauge.
+    assert cost.amount_usd == Decimal("0")
+    assert cost.status == "included"
+    assert cost.source == "subscription_included"
+    assert cost.list_price_usd == Decimal("0.012345")
+    assert any("list-price equivalent" in note for note in cost.notes)
     for invalid in (float("nan"), float("inf"), -1, True, None):
         reported["native_cost"]["total_cost_usd"] = invalid
         cost = estimate_usage_cost("sonnet", normalize_usage(reported), provider=profile.name)
