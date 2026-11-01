@@ -89,6 +89,11 @@ def _cursor_path() -> Path:
     return _state_dir() / "cursors.json"
 
 
+def _conversations_path() -> Path:
+    """Conversation ids seen so far — the fallback when the list endpoint is dark."""
+    return _state_dir() / "conversations.json"
+
+
 def _load_cursors() -> Dict[str, str]:
     """Per-conversation cursors (last processed event id), persisted to disk.
 
@@ -292,6 +297,8 @@ class XChatAdapter(BasePlatformAdapter):
         # backlog guard; the in-memory dedup set is only a same-session
         # safety net (echo suppression of our own sends).
         self._conversations: Set[str] = set(self._pinned_conversations)
+        # Monotonic deadline before which the conversation list is not re-tried.
+        self._discovery_blocked_until = 0.0
         # Conversations that appeared after the first discovery pass: no backlog to skip.
         self._initial_discovery_done = False
         self._live_conversations: Set[str] = set()
@@ -401,6 +408,7 @@ class XChatAdapter(BasePlatformAdapter):
             await self._teardown()
             return False
 
+        self._load_conversations()
         self._running = True
         self._poll_task = asyncio.create_task(self._run_poll_loop())
         self._mark_connected()
@@ -455,7 +463,7 @@ class XChatAdapter(BasePlatformAdapter):
                 # anything newer than our cursor; only those get an events read. Events
                 # are billed per resource returned, so re-reading idle conversations
                 # every cycle is the dominant cost.
-                newest = await self._discover_conversations()
+                newest = await self._discover_or_degrade()
                 for conv_id in list(self._conversations):
                     if not self._running:
                         return
@@ -507,7 +515,72 @@ class XChatAdapter(BasePlatformAdapter):
         if self._pinned_conversations:
             return newest  # pinned: poll exactly those, never widen the set
         self._conversations |= found
+        if new:
+            self._persist_conversations()
         return newest
+
+    def _persist_conversations(self) -> None:
+        try:
+            path = _conversations_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(sorted(self._conversations)))
+            os.chmod(tmp, 0o600)
+            tmp.replace(path)
+        except Exception as e:  # noqa: BLE001 - cache only
+            logger.warning("[xchat] could not persist conversation list: %s", e)
+
+    def _load_conversations(self) -> None:
+        path = _conversations_path()
+        before = len(self._conversations)
+        try:
+            if path.exists():
+                known = json.loads(path.read_text() or "[]")
+                if isinstance(known, list):
+                    self._conversations |= {str(c) for c in known if c}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[xchat] could not load known conversations: %s", e)
+        # Cursors are keyed by conversation, so a conversation we have polled
+        # before is recoverable even if the id list was never written.
+        self._conversations |= set(self._cursors)
+        if len(self._conversations) > before:
+            logger.info(
+                "[xchat] loaded %d known conversation(s)",
+                len(self._conversations) - before,
+            )
+
+    async def _discover_or_degrade(self) -> Dict[str, str]:
+        """List conversations, or fall back to known ones when the list is refused.
+
+        The list endpoint and the per-conversation events endpoint are metered
+        separately (1,000/day against 10,000/day on current limits), so a
+        throttled list does not mean inbound has to stop: known conversation ids
+        — persisted, so a restart mid-throttle still has them — can be polled
+        directly. Discovery is re-tried when the throttle is due to lift rather
+        than every cycle, which would spend a refused request per cycle.
+        """
+        now = time.monotonic()
+        if now >= self._discovery_blocked_until:
+            try:
+                return await self._discover_conversations()
+            except XChatRateLimited as e:
+                wait = 300.0
+                if e.reset_epoch:
+                    wait = min(max(60.0, e.reset_epoch - time.time()), 1800.0)
+                self._discovery_blocked_until = now + wait
+                logger.warning(
+                    "[xchat] conversation list throttled — polling %d known conversation(s) "
+                    "directly for the next %.0fs",
+                    len(self._conversations),
+                    wait,
+                )
+        if not self._conversations:
+            raise RuntimeError(
+                "conversation list throttled and no known conversations to fall back on"
+            )
+        # No head ids without the list: every known conversation is polled, and
+        # the cursor check inside _poll_conversation keeps that to one page each.
+        return {}
 
     async def _poll_conversation(self, conv_id: str) -> None:
         assert self._api is not None and self._crypto is not None

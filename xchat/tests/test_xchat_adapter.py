@@ -1152,3 +1152,68 @@ def test_send_target_forms():
     assert parse("999") == ("999", None)
     assert parse("g12345") == ("g12345", None)
     assert parse("#general") is None
+
+
+@pytest.mark.asyncio
+async def test_degraded_discovery_polls_known_conversations(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    api, _crypto = _wire(adapter)
+    adapter._conversations = {"111:999"}
+
+    calls = {"n": 0}
+
+    async def throttled(**_kw):
+        calls["n"] += 1
+        raise xchat_adapter.XChatRateLimited("rate limited", int(time.time()) + 600)
+
+    api.get_conversations = throttled
+
+    # The throttled list degrades to the known set instead of ending the cycle.
+    assert await adapter._discover_or_degrade() == {}
+    assert calls["n"] == 1
+    assert adapter._discovery_blocked_until > 0
+
+    # While the block is live the list is not called again.
+    assert await adapter._discover_or_degrade() == {}
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_degraded_discovery_without_known_conversations_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    api, _crypto = _wire(adapter)
+    adapter._conversations = set()
+
+    async def throttled(**_kw):
+        raise xchat_adapter.XChatRateLimited("rate limited", int(time.time()) + 600)
+
+    api.get_conversations = throttled
+
+    with pytest.raises(RuntimeError):
+        await adapter._discover_or_degrade()
+
+
+def test_known_conversations_persist_across_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = {"111:999"}
+    adapter._persist_conversations()
+
+    path = tmp_path / "conversations.json"
+    assert path.exists()
+    assert oct(path.stat().st_mode)[-3:] == "600"
+
+    second = _make_adapter(monkeypatch)
+    second._load_conversations()
+    assert "111:999" in second._conversations
+
+
+def test_known_conversations_recover_from_cursor_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = set()
+    adapter._cursors = {"111-999": "e1"}
+    adapter._load_conversations()
+    assert "111-999" in adapter._conversations
