@@ -101,6 +101,19 @@ def test_native_never_sends_its_own_session_title_request(profile, tmp_path, mon
 
 
 @pytest.mark.parametrize("child", ["discovery", "turn"])
+def test_native_requests_go_out_under_hermes_own_name(profile, tmp_path, child):
+    """anthropics/claude-code#97074: subscriptions meter the default `sdk-cli` name (and an inherited host's
+    `sdk-py`) about 2x heavier per token, so every child runs as `hermes-agent`, without the artifact
+    scratchpad line a non-SDK name would add to every request."""
+    inherited = {"CLAUDE_CODE_ENTRYPOINT": "sdk-py"}
+    envs = (_discovery_envs(profile, tmp_path, **inherited) if child == "discovery"
+            else [_turn_env(profile, tmp_path, **inherited)])
+    for env in envs:
+        assert env["CLAUDE_CODE_ENTRYPOINT"] == "hermes-agent"
+        assert env["CLAUDE_CODE_DISABLE_ARTIFACT"] == "1"
+
+
+@pytest.mark.parametrize("child", ["discovery", "turn"])
 def test_a_users_own_opt_out_is_never_stripped(profile, tmp_path, child):
     flags = {"DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1"}
     envs = (_discovery_envs(profile, tmp_path, **flags) if child == "discovery"
