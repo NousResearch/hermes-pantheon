@@ -11,7 +11,8 @@
       ],
       "env": {
         "REA_GHIDRA_STARTUP_TIMEOUT_MS": "900000",
-        "REA_PWNTOOLS_PYTHON": "${REA_PWNTOOLS_PYTHON}"
+        "REA_PWNTOOLS_PYTHON": "${REA_PWNTOOLS_PYTHON}",
+        "GHIDRA_INSTALL_DIR": "${GHIDRA_INSTALL_DIR}"
       }
     }
   }
