@@ -476,6 +476,44 @@ class TestStringData:
         assert "Invalid JSON string" in result["error"]
 
 
+class TestObjectData:
+    """`data` accepts a plain object, which is what models emit natively.
+
+    The handler always knew how to take one; only the advertised schema said
+    ``type: string``, so argument validation rejected a dict before dispatch and
+    every play_media / volume_set call paid a failed tool call plus a full model
+    round trip to retry with a JSON string.
+    """
+
+    @patch("homeassistant_plugin.tools._async_call_service", new_callable=AsyncMock)
+    def test_object_data_reaches_the_service_layer(self, mock_call_service):
+        mock_call_service.return_value = {"success": True}
+        result = json.loads(_handle_call_service({
+            "domain": "media_player", "service": "play_media",
+            "entity_id": "media_player.kitchen",
+            "data": {"media_content_id": "radar weekly", "media_content_type": "playlist"},
+        }))
+        assert "error" not in result
+        mock_call_service.assert_awaited_once_with(
+            "media_player", "play_media", "media_player.kitchen",
+            {"media_content_id": "radar weekly", "media_content_type": "playlist"})
+
+    @pytest.mark.parametrize("data", [
+        {"volume_level": 0.3},          # native object, the normal shape
+        '{"volume_level": 0.3}',        # JSON string, XML tool-calling mode
+    ])
+    def test_advertised_schema_accepts_object_and_json_string(self, data):
+        from jsonschema.validators import validator_for
+
+        params = ha_tool.HA_CALL_SERVICE_SCHEMA["parameters"]
+        validator = validator_for(params)(params)
+        args = {
+            "domain": "media_player", "service": "volume_set",
+            "entity_id": "media_player.kitchen", "data": data,
+        }
+        assert list(validator.iter_errors(args)) == []
+
+
 class TestUrlWithoutScheme:
     def test_scheme_is_required(self):
         from homeassistant_plugin.tools import url_scheme_problem

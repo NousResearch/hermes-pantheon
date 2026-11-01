@@ -933,12 +933,18 @@ HA_CALL_SERVICE_SCHEMA: Dict[str, Any] = {
                 ),
             },
             "data": {
-                "type": "string",
+                # A plain object is what models emit natively; the handler has always
+                # accepted one. A JSON-encoded string stays valid for XML tool-calling
+                # mode, which can only pass strings.
+                "type": ["string", "object"],
                 "description": (
-                    "Additional service data as a JSON string. Examples: "
+                    "Additional service data. Prefer a plain object: "
                     '{"brightness": 255, "color_name": "blue"} for lights, '
                     '{"temperature": 22, "hvac_mode": "heat"} for climate, '
-                    '{"volume_level": 0.5} for media players.'
+                    '{"volume_level": 0.5} for media players, '
+                    '{"media_content_id": "radar weekly", "media_content_type": "playlist"} '
+                    "for media_player.play_media. A JSON-encoded string of the same object "
+                    "is also accepted."
                 ),
             },
         },
