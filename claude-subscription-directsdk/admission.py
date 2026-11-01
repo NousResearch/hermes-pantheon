@@ -666,6 +666,7 @@ class Admission:
         self.sockets = set()
         self.cancelled = False
         self.used = False
+        self.retry_allowed = False
         self.denied = 0
         self.request_id = None
         self.status = None
@@ -772,7 +773,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         with gate.lock:
-            if gate.cancelled or gate.used:
+            if gate.cancelled or (gate.used and not gate.retry_allowed):
                 gate.denied += 1
                 body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_CONSUMED"}}'
                 self.send_response(400)
@@ -781,7 +782,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            gate.used = True
+            if gate.retry_allowed:
+                gate.retry_allowed = False
+            else:
+                gate.used = True
         conn = None
         upstream_socket = None
         try:
@@ -842,6 +846,9 @@ class Handler(BaseHTTPRequestHandler):
             del headers, payload, wire
             gate.request_id = response.getheader('request-id') or response.getheader('x-request-id')
             gate.status = response.status
+            if response.status == 401:
+                with gate.lock:
+                    gate.retry_allowed = True
             self.send_response(response.status)
             for key, value in response.getheaders():
                 if key.lower() not in ('connection','transfer-encoding','server','date'):

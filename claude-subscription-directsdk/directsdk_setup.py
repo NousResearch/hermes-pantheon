@@ -128,6 +128,11 @@ def apply_traffic_policy(env, telemetry=None):
 
 def _child_env(env):
     child = dict(env)
+    # Drop API-key credentials inherited from Hermes' environment so `claude auth
+    # status` reports the subscription login rather than an API-key one.  Endpoint
+    # and backend redirects are preserved (they change where requests go).
+    for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FOUNDRY_API_KEY"):
+        child.pop(key, None)
     apply_config_dir(child)
     return apply_traffic_policy(child)
 
