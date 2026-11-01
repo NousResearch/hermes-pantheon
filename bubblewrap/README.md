@@ -222,8 +222,9 @@ Unset and missing variables change nothing and log nothing.
 - **Other Unix sockets stay connectable** (a read-only mount does not block `connect()`): anything
   outside `/run/user/<uid>`, `/tmp` and the docker socket, if a command knows its path.
 - **No background processes.** Each command is its own sandbox, and bwrap tears it down (pid namespace
-  included) when the command's shell exits, so a `background: true` job dies right after it starts.
-  The model is told background processes are unavailable on this backend.
+  included) when the command's shell exits, so a `background: true` job would die right after it
+  starts. The call is refused with an error saying so, instead of reporting a started job, and the
+  model is told background processes are unavailable on this backend.
 - **No persistent `execute_code` kernel.** Hermes tries its remote session kernel first, which cannot
   outlive the sandbox that starts it; it then falls back to running each `execute_code` call as its
   own script (inside the sandbox, under the same limits). Python state does not carry over between

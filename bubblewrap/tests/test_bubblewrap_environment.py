@@ -10,6 +10,7 @@ import builtins
 import inspect
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -24,10 +25,12 @@ import pytest
 from tools.environments.base import get_sandbox_dir
 from bubblewrap_plugin import sandbox as bubblewrap
 from bubblewrap_plugin.sandbox import (
+    BACKGROUND_LAUNCH_REFUSAL,
     BindMount,
     BubblewrapConfig,
     BubblewrapEnvironment,
     chdir_failed,
+    is_background_launch,
     masked_inside,
     HOST_SOCKET_VARS,
     build_bwrap_args,
@@ -1553,3 +1556,68 @@ class TestRuntimeDirAndDockerSocketMasked:
             assert result["returncode"] != 0, sock
             result = env.execute(f"test -f {sock} && wc -c < {sock}")
             assert result["returncode"] == 0 and result["output"].strip() == "0", (sock, result)
+
+
+def _core_launch_wrapper(temp_dir: str, command: str = "sleep 2; touch bg-marker") -> str:
+    """Core's background-launch wrapper for a non-local backend, byte for byte as
+    spawn_via_env in tools/process_registry.py builds it (session id abbreviated)."""
+    q = shlex.quote
+    log_path, pid_path, exit_path = (f"{temp_dir}/hermes_bg_proc_0123456789ab.{ext}" for ext in ("log", "pid", "exit"))
+    return (
+        f"mkdir -p {q(temp_dir)} && "
+        f"( nohup bash -lc {q(command)} > {q(log_path)} 2>&1; "
+        f"rc=$?; printf '%s\\n' \"$rc\" > {q(exit_path)} ) & "
+        f"echo $! > {q(pid_path)} && cat {q(pid_path)}")
+
+
+class TestBackgroundLaunchRefusal:
+    """terminal(background=true) on this backend (#236): the job dies with the launching
+    command's sandbox, so reporting "Background process started" with a pollable session
+    id sends the model waiting on a process that no longer exists. Core has no "no
+    background processes" flag for plugin backends; the environment refuses core's
+    launch wrapper in execute() instead, and core reports the launch as failed."""
+
+    def test_detector_matches_only_the_launch(self, sandbox_root, work_dir):
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
+        temp = env.get_temp_dir()
+        assert is_background_launch(_core_launch_wrapper(temp))
+        # Poll, liveness and kill of a started job name the same triplet but run no nohup.
+        assert not is_background_launch(f"kill -0 \"$(cat '{temp}/hermes_bg_proc_0123456789ab.pid' 2>/dev/null)\" 2>/dev/null; echo $?")
+        assert not is_background_launch(f"cat '{temp}/hermes_bg_proc_0123456789ab.exit' 2>/dev/null")
+        # A foreground user command is never the wrapper, nohup or a stray filename included.
+        assert not is_background_launch("nohup make -j4 &")
+        assert not is_background_launch("ls hermes_bg_notes.txt")
+
+    def test_launch_is_refused_before_anything_spawns(self, sandbox_root, work_dir):
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
+        wrapper = _core_launch_wrapper(env.get_temp_dir())
+        with patch.object(LocalEnvironment, "execute", autospec=True,
+                          side_effect=AssertionError("a refused launch must not reach the spawn")):
+            result = env.execute(wrapper, cwd=str(work_dir), rewrite_compound_background=False)
+        assert result["returncode"] != 0
+        assert result["output"] == BACKGROUND_LAUNCH_REFUSAL
+        assert "background processes are not supported by this backend" in result["output"]
+        # Core reads the pid back as a line of digits alone; the refusal must offer none.
+        assert not any(line.strip().isdigit() for line in result["output"].splitlines())
+
+    def test_spawn_via_env_reports_the_refusal_as_a_failed_launch(self, sandbox_root, work_dir):
+        from tools.process_registry import process_registry
+
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
+        with patch.object(LocalEnvironment, "execute", autospec=True,
+                          side_effect=AssertionError("a refused launch must not reach the spawn")):
+            with pytest.raises(RuntimeError, match="background processes are not supported by this backend"):
+                process_registry.spawn_via_env(env=env, command="sleep 2; touch bg-marker",
+                                               cwd=str(work_dir), task_id="background-refusal")
+
+    def test_foreground_commands_run_as_before(self, sandbox_root, work_dir):
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
+        sentinel = {"output": "ran", "returncode": 0}
+        with patch.object(LocalEnvironment, "execute", autospec=True, return_value=dict(sentinel)) as ran:
+            assert env.execute("echo hi")["output"] == "ran"
+            assert env.execute("nohup echo hi")["output"] == "ran"
+            assert ran.call_count == 2

@@ -212,14 +212,13 @@ class TestToolIntegration:
         assert "TRUST-ANCHORS" in r["output"]
         assert "config.yaml" not in r["output"]
 
-    def test_background_never_runs_on_the_host_and_ends_with_its_sandbox(self, isolated_tool, work_dir, monkeypatch):
-        """Hermes core has no "no background processes" flag for plugin backends, so a background job is
-        launched through env.execute like on any non-local backend. It must run inside the sandbox
-        (never spawn_local on the host) and go down with it: bwrap tears the pid namespace down
-        when the launching shell exits, so the job never writes its marker. The system prompt
-        note tells the model background processes are unavailable here."""
-        import time
-
+    def test_background_launch_is_refused_with_a_clear_error(self, isolated_tool, work_dir, monkeypatch):
+        """terminal(background=true) used to report "Background process started" with a pollable
+        session id while the job died with the launching command's sandbox (#236): a model that
+        trusts tool results waited on a process that no longer existed. Hermes core has no
+        "no background processes" flag for plugin backends, so the environment refuses core's
+        launch wrapper in execute(); the tool result is the refusal, not a live process. The job
+        runs nowhere: never spawn_local on the host, and no marker is ever written."""
         from tools.process_registry import process_registry
 
         def forbidden(*args, **kwargs):
@@ -227,16 +226,9 @@ class TestToolIntegration:
 
         monkeypatch.setattr(process_registry, "spawn_local", forbidden)
         r = json.loads(isolated_tool.terminal_tool("sleep 2; touch bg-marker", background=True, task_id="background"))
-        session_id = r.get("session_id")
-        deadline = time.monotonic() + 15
-        status = {}
-        while time.monotonic() < deadline:
-            status = process_registry.poll(session_id) if session_id else {"status": "exited"}
-            if status.get("status") != "running":
-                break
-            time.sleep(0.5)
-        assert status.get("status") != "running", status
-        time.sleep(3)
+        assert r.get("output") != "Background process started", r
+        assert not r.get("session_id"), r
+        assert "background processes are not supported by this backend" in r.get("error", ""), r
         assert not (work_dir / "bg-marker").exists()
 
 @needs_bwrap

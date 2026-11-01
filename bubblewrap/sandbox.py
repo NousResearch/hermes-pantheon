@@ -95,6 +95,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import resource
 import shlex
 import shutil
@@ -1172,6 +1173,42 @@ def chdir_failed(result: Mapping[str, object], tracked_cwd: str) -> bool:
     return len(lines) == 1 and lines[0].startswith(f"bwrap: Can't chdir to {tracked_cwd}:")
 
 
+# The pid file of Hermes core's background-job triplet (``hermes_bg_<session>``
+# as .log/.pid/.exit in the environment's temp dir); core's own local backend
+# matches the same name when sweeping stale artifacts.
+_BG_PID_FILE_RE = re.compile(r"hermes_bg_[A-Za-z0-9_-]+\.pid")
+
+
+def is_background_launch(command: str) -> bool:
+    """True when *command* is Hermes core's background-job launch wrapper.
+
+    Core starts a ``background=true`` job on a non-local backend by executing
+    one wrapper command in the environment (``spawn_via_env`` in
+    tools/process_registry.py): it nohups the command with its output going
+    to the triplet's .log and echoes the child's pid out of the .pid file,
+    which the launcher reads back as proof the job started. Poll, wait and
+    kill of an already-started job reference the triplet too but run no
+    nohup, so only the launch matches. Like chdir_failed this reads a shape
+    core generates, never a user command: a foreground command would have to
+    name another session's pid file and run nohup to be refused, and
+    refusing it is the safe direction anyway.
+    """
+    return "nohup" in command and _BG_PID_FILE_RE.search(command) is not None
+
+
+#: What execute() answers a background launch with. The text reaches the
+#: model inside core's failed-launch error, so it names the backend, why
+#: the job cannot live, and what to do instead. It must never contain a
+#: line of digits alone: the launcher scans the output for the pid.
+BACKGROUND_LAUNCH_REFUSAL = (
+    "bubblewrap: background processes are not supported by this backend: "
+    "each command runs in its own sandbox, which is torn down when the "
+    "command returns, so a background job would die with the sandbox "
+    "instead of running to completion. Run the command in the foreground, "
+    "or use a backend that keeps processes."
+)
+
+
 # Directories the sandboxes this process built can write to, per Hermes home
 # (real path): the working directories, read-write bind sources and profile
 # homes. Sessions of one profile can run with different working
@@ -1633,6 +1670,13 @@ class BubblewrapEnvironment(LocalEnvironment):
     def execute(self, command: str, cwd: str = "", **kwargs) -> dict:
         """Run a command; report a tracked cwd that the sandbox mounts hide.
 
+        A background launch (terminal(background=true), which core runs
+        through this method as a nohup wrapper) is refused before anything
+        spawns: the job would die with this command's sandbox, while the
+        wrapper's pid echo would make core report a live, pollable process.
+        The refusal result carries no pid-shaped line, so core reports the
+        launch as failed with BACKGROUND_LAUNCH_REFUSAL as the reason.
+
         The tracked cwd is checked against the host (LocalEnvironment's
         missing-cwd recovery), not against what the overlays mask
         inside the sandbox. After ``cd`` into a host directory under a
@@ -1646,6 +1690,9 @@ class BubblewrapEnvironment(LocalEnvironment):
         command: its shape can be forged by a command that prints the
         bwrap line and replaces its shell.
         """
+        if is_background_launch(command):
+            logger.warning("bubblewrap: refusing a background launch; this backend cannot keep processes")
+            return {"output": BACKGROUND_LAUNCH_REFUSAL, "returncode": 1}
         if cwd and cwd == self._replaced_cwd:
             cwd = ""
         note = self._reset_masked_cwd()
