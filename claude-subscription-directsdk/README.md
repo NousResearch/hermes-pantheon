@@ -160,7 +160,18 @@ Selecting the provider asks the Claude CLI itself, never Anthropic, before anyth
 
 The same `discover_models()` feeds `provider_model_ids()`, so the TUI/Desktop pickers and `/model` list the account's picker too.
 
-## Subscription usage: same metering as `claude -p`; the interactive TUI is metered more lightly
+## Subscription usage
+
+Claude Code names its caller on every request, and subscriptions meter the 5-hour window by that name: `claude -p` defaults to `sdk-cli`, which draws the window about 2x faster per token than the interactive CLI or a client's own name ([anthropics/claude-code#97074](https://github.com/anthropics/claude-code/issues/97074)). The plugin runs native as `hermes-agent`, overwriting any name inherited from a host (`sdk-py`, `claude-desktop`). Measured Oct 31 2026 on a Max plan with Opus 5.5 and Claude Code 2.1.316, four arms of four fresh ~43K-token requests each ($1.09 list-equivalent per arm, output pinned), 5-hour utilization read after each arm:
+
+| arm | name on requests | 5-hour Δ (two arms) | total for $2.19 |
+|---|---|---|---|
+| plugin before this change | `sdk-cli` | +6% / +6% | 12% |
+| plugin now | `hermes-agent` | +4% / +3% | 7% |
+
+The same work used about 1.7x less of the window under the plugin's own name. Anthropic has not documented the weighting, so it can change.
+
+The readings below predate the change and describe the `sdk-cli` rate.
 
 Measured Sept 9 2026 on a Pro plan (Sonnet 5 1M, ~500K fresh input tokens per arm, output pinned to `Hello!`, session meter read on claude.ai before/after each arm):
 

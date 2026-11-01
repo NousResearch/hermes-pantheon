@@ -66,6 +66,13 @@ QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEM
 # also stops native's own session-title request (#116): under an inherited Agent SDK or non-CLI
 # entrypoint, or a server flag, it races the turn for the one upstream request the relay admits.
 ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
+# Native names its caller on every request (`cc_entrypoint` in the billing header, the user agent).
+# Under `-p` it defaults to `sdk-cli`, and subscriptions draw the 5-hour window about 2x faster per
+# token for `sdk-*` callers than for the interactive CLI or a client's own name (anthropics/claude-code#97074).
+# An inherited host name (`sdk-py`, `claude-desktop`) would reach the child too, so it is overwritten.
+# Off the `sdk-*` names native offers its artifact tool and adds a scratchpad line to every request;
+# CLAUDE_CODE_DISABLE_ARTIFACT keeps the request identical to the `sdk-cli` one apart from the name.
+CALLER_IDENTITY = {"CLAUDE_CODE_ENTRYPOINT": "hermes-agent", "CLAUDE_CODE_DISABLE_ARTIFACT": "1"}
 _OFF = ("false", "0", "no", "off")
 
 
@@ -111,8 +118,9 @@ def apply_traffic_policy(env, telemetry=None):
 
     Never removes anything: a flag the user exported in Hermes' own environment
     (``DISABLE_TELEMETRY``, ``DO_NOT_TRACK``, ...) still reaches the child with the setting on.
+    The caller name is the one value replaced, whatever the parent set.
     """
-    env.update(ALWAYS_QUIET)
+    env.update(ALWAYS_QUIET, **CALLER_IDENTITY)
     if not (telemetry_enabled() if telemetry is None else telemetry):
         env.update(QUIET_TRAFFIC)
     return env
