@@ -27,7 +27,7 @@ def test_extract_subject_candidates_prefers_titles_and_paths(memory_wiki_core):
     names = [c.name for c in candidates]
     assert "memory wiki" in names
     assert "web/src/App.tsx" in names
-    assert "search_files" in names
+    assert "search_files" not in names
 
 
 def test_extract_subject_candidates_merges_duplicate_slugs_and_accumulates_score(memory_wiki_core):
@@ -81,7 +81,7 @@ def test_extract_subject_candidates_nested_tool_calls_and_malformed_tool_calls(m
     )
 
     names = {candidate.name for candidate in candidates}
-    assert "search_files" in names
+    assert "search_files" not in names
 
 
 def test_extract_subject_candidates_first_user_keyword_phrase_and_package_mentions(memory_wiki_core):
@@ -115,7 +115,7 @@ def test_extract_subject_candidates_hyphenated_title_alias(memory_wiki_core):
     assert by_slug["memory-wiki"].name == "memory wiki"
 
 
-def test_build_memory_overview_aggregates_subjects_and_daily_logs(memory_wiki_core, tmp_path):
+def test_build_memory_overview_aggregates_subjects_and_daily_logs(memory_wiki_core, tmp_path, hermes_home):
     build_memory_overview = memory_wiki_core.build_memory_overview
     from hermes_state import SessionDB
 
@@ -150,7 +150,7 @@ def test_build_memory_overview_aggregates_subjects_and_daily_logs(memory_wiki_co
     assert day["message_count"] == 5
     assert {session["id"] for session in day["sessions"]} == {"s-memory", "s-fastapi"}
     assert {subject["slug"] for subject in day["subjects"]} >= {"memory-wiki", "fastapi"}
-    assert any(item["kind"] == "tool" and "search_files" in item["text"] for item in day["work_items"])
+    assert all(item["kind"] != "tool" for item in day["work_items"])
 
 
 def test_memory_subject_and_daily_log_detail_lookup_and_query_filter(memory_wiki_core, tmp_path):

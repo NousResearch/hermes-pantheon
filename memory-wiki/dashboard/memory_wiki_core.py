@@ -22,6 +22,7 @@ class SubjectCandidate:
     slug: str
     score: int = 1
     source: str = "text"
+    user_supported: bool = False
 
 
 _STOPWORDS = {
@@ -90,7 +91,7 @@ _CAMEL_CASE_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b")
 _TITLE_CASE_PHRASE_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+){1,3}\b")
 _QUOTED_PHRASE_RE = re.compile(r"[\"'“‘]([^\"'”’]{3,80})[\"'”’]")
 _SLASH_COMMAND_RE = re.compile(r"(?<!\S)/[A-Za-z][A-Za-z0-9_-]*\b")
-_TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+_TOOL_NAME_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:[_.][A-Za-z_][A-Za-z0-9_]*)+\b")
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 _PACKAGE_RE = re.compile(
     r"\b(?:"
@@ -111,10 +112,8 @@ def slugify_subject(name: str) -> str:
 def extract_subject_candidates(session: dict, messages: list[dict]) -> list[SubjectCandidate]:
     """Extract deterministic subject candidates from a session and its messages.
 
-    The heuristic favors explicit metadata and structured mentions: session
-    titles, paths, tool names, slash commands, quoted phrases, and CamelCase
-    identifiers.  Duplicate subjects are merged by slug while preserving the
-    first useful display name.
+    Only user content and the title introduce or score topics. User evidence
+    ranks first; assistant content is used separately for matching context.
     """
 
     candidates: dict[str, SubjectCandidate] = {}
@@ -126,13 +125,14 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
         slug = slugify_subject(cleaned)
         existing = candidates.get(slug)
         if existing is None:
-            candidates[slug] = SubjectCandidate(cleaned, slug, score, source)
+            candidates[slug] = SubjectCandidate(cleaned, slug, score, source, source != "title")
         else:
             candidates[slug] = SubjectCandidate(
                 existing.name,
                 existing.slug,
                 existing.score + score,
                 existing.source,
+                existing.user_supported or source != "title",
             )
 
     title = str(session.get("title") or "")
@@ -141,42 +141,23 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
         if title_phrase:
             add(title_phrase, score=6, source="title")
 
-    preview = str(session.get("preview") or "")
-    _extract_from_text(preview, add, base_score=2)
-    preview_phrase = _keyword_phrase(preview)
-    if preview_phrase:
-        add(preview_phrase, score=2, source="preview")
-
-    first_user_text_seen = False
     for message in messages:
-        tool_name = str(message.get("tool_name") or "")
-        if tool_name and _TOOL_NAME_RE.match(tool_name):
-            add(tool_name, score=5, source="tool")
+        if message.get("role") != "user":
+            continue
+        content = _message_text(message)
+        _extract_from_text(content, add, base_score=3)
+        phrase = _keyword_phrase(content)
+        if phrase:
+            add(phrase, score=3, source="user_phrase")
 
-        tool_calls = message.get("tool_calls") or ()
-        if not isinstance(tool_calls, (list, tuple)):
-            tool_calls = ()
-        for tool_call in tool_calls:
-            if isinstance(tool_call, dict):
-                function = tool_call.get("function")
-                function_name = function.get("name") if isinstance(function, dict) else None
-                name = tool_call.get("name") or function_name
-                if name and _TOOL_NAME_RE.match(str(name)):
-                    add(str(name), score=5, source="tool")
-
-        content = str(message.get("content") or "")
-        is_user = message.get("role") == "user"
-        _extract_from_text(content, add, base_score=3 if is_user else 1)
-        if is_user and not first_user_text_seen:
-            first_user_text_seen = True
-            phrase = _keyword_phrase(content)
-            if phrase:
-                add(phrase, score=3, source="user_phrase")
-
-    return sorted(candidates.values(), key=lambda c: (-c.score, c.name.lower()))
+    return sorted(candidates.values(), key=lambda c: (
+        not c.user_supported, -c.score, c.name.lower(),
+    ))
 
 
 def _extract_from_text(text: str, add, *, base_score: int) -> None:
+    for match in _TOOL_NAME_RE.findall(text):
+        add(match, score=base_score + 1, source="identifier")
     for match in _PATH_RE.findall(text):
         add(match, score=base_score + 3, source="path")
     for match in _QUOTED_PHRASE_RE.findall(text):
@@ -247,10 +228,12 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
                     "sessions": [],
                     "snippets": [],
                     "_score": 0,
+                    "_user_supported": False,
                     "_session_ids": set(),
                 },
             )
             subject["_score"] += candidate.score
+            subject["_user_supported"] |= candidate.user_supported
             if candidate.name not in subject["keywords"]:
                 subject["keywords"].append(candidate.name)
             subject["first_seen"] = min(subject["first_seen"], first_seen)
@@ -262,7 +245,10 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
                 subject["message_count"] += message_count
             subject["snippets"].extend(snippets_by_slug.get(candidate.slug, []))
 
-    results = [_finalize_subject(subject) for subject in subjects.values()]
+    ranked = sorted(subjects.values(), key=lambda s: (
+        not s["_user_supported"], -s["_score"], -s["session_count"], s["name"].lower(),
+    ))
+    results = [_finalize_subject(subject) for subject in ranked]
     if query:
         needle = query.lower().strip()
         results = [
@@ -273,7 +259,6 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
             or any(needle in keyword.lower() for keyword in subject["keywords"])
         ]
 
-    results.sort(key=lambda s: (-s["session_count"], -s["last_seen"], s["name"].lower()))
     return results[:limit]
 
 
@@ -322,16 +307,24 @@ def build_daily_logs(db, *, limit_days: int = 60) -> list[dict]:
         for candidate in extract_subject_candidates(session, messages):
             entry = day["_subjects"].setdefault(
                 candidate.slug,
-                {"slug": candidate.slug, "name": candidate.name, "count": 0},
+                {"slug": candidate.slug, "name": candidate.name, "count": 0,
+                 "_user_supported": False, "_score": 0},
             )
             entry["count"] += 1
+            entry["_user_supported"] |= candidate.user_supported
+            entry["_score"] += candidate.score
 
         day["work_items"].extend(_work_items_for_session(session, messages))
 
     logs = []
     for day in days.values():
         subjects = list(day.pop("_subjects").values())
-        subjects.sort(key=lambda s: (-s["count"], s["name"].lower()))
+        subjects.sort(key=lambda s: (
+            not s["_user_supported"], -s["_score"], -s["count"], s["name"].lower(),
+        ))
+        for subject in subjects:
+            subject.pop("_user_supported")
+            subject.pop("_score")
         day["subjects"] = subjects[:20]
         day["sessions"].sort(key=lambda s: (-s["last_active"], s["id"]))
         day["work_items"].sort(key=lambda w: (w["timestamp"], w["session_id"], w["text"]))
@@ -442,11 +435,15 @@ def _date_key(timestamp: float) -> str:
 
 def _message_text(message: dict) -> str:
     content = message.get("content")
+    if isinstance(content, list):
+        content = " ".join(
+            block["text"] for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        )
     if isinstance(content, str):
         return " ".join(content.split())
-    if content is None:
-        return ""
-    return " ".join(str(content).split())
+    return ""
 
 
 def _snippets_for_candidates(
@@ -455,29 +452,30 @@ def _snippets_for_candidates(
     candidates: list[SubjectCandidate],
 ) -> dict[str, list[dict]]:
     snippets: dict[str, list[dict]] = {candidate.slug: [] for candidate in candidates}
-    candidate_by_slug = {candidate.slug: candidate for candidate in candidates}
     for message in messages:
-        text = _message_text(message)
-        haystack = " ".join((text, str(message.get("tool_name") or ""))).lower()
-        if not haystack.strip():
+        if message.get("role") not in ("user", "assistant"):
             continue
-        for slug, candidate in candidate_by_slug.items():
-            terms = {candidate.name.lower(), slug.replace("-", " ")}
-            if any(term and term in haystack for term in terms):
-                snippets[slug].append(_snippet(session, message, text))
-                break
-
-    fallback = None
-    for message in messages:
         text = _message_text(message)
-        if text:
-            fallback = _snippet(session, message, text)
-            break
-    if fallback:
-        for slug in snippets:
-            if not snippets[slug]:
-                snippets[slug].append(dict(fallback))
+        for candidate in candidates:
+            if _matches_candidate(text, candidate):
+                snippets[candidate.slug].append(_snippet(session, message, text))
+
     return snippets
+
+
+def _matches_candidate(text: str, candidate: SubjectCandidate) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if not normalized:
+        return False
+    if f"-{candidate.slug}-" in f"-{normalized}-":
+        return True
+    # Normalize whole-message, quoted and title-case phrases as extraction does.
+    texts = [text, *_QUOTED_PHRASE_RE.findall(text), *_TITLE_CASE_PHRASE_RE.findall(text)]
+    for phrase_text in texts:
+        phrase = _keyword_phrase(phrase_text)
+        if phrase and candidate.slug == slugify_subject(phrase):
+            return True
+    return False
 
 
 def _snippet(session: dict, message: dict, text: str) -> dict:
@@ -493,31 +491,35 @@ def _snippet(session: dict, message: dict, text: str) -> dict:
 def _finalize_subject(subject: dict) -> dict:
     result = dict(subject)
     result.pop("_score", None)
+    result.pop("_user_supported", None)
     result.pop("_session_ids", None)
     result["keywords"] = result["keywords"][:10]
     result["sessions"].sort(key=lambda s: (-s["last_active"], s["id"]))
     result["sessions"] = result["sessions"][:10]
-    result["snippets"].sort(key=lambda s: (s["timestamp"], s["session_id"], s.get("message_id") or 0))
+    result["snippets"].sort(key=lambda s: (
+        s["role"] != "user", s["timestamp"], s["session_id"], s.get("message_id") or 0,
+    ))
     result["snippets"] = result["snippets"][:5]
     return result
 
 
 def _work_items_for_session(session: dict, messages: list[dict]) -> list[dict]:
-    items = []
+    users = []
+    support = []
+    candidates = extract_subject_candidates(session, messages)
     for message in messages:
         role = message.get("role")
         text = _message_text(message)
-        tool_name = str(message.get("tool_name") or "")
-        if role == "tool" or tool_name:
-            label = tool_name or text or "tool call"
-            items.append(_work_item(session, message, "tool", f"Tool: {label}"))
-        elif role == "user" and text:
-            items.append(_work_item(session, message, _classify_work(text), text))
+        if role == "user" and text:
+            users.append(_work_item(session, message, _classify_work(text), text))
         elif role == "assistant" and text:
             lowered = text.lower()
-            if any(word in lowered for word in ("implemented", "added", "fixed", "updated")):
-                items.append(_work_item(session, message, _classify_work(text), text))
-    return items[:8]
+            if (any(word in lowered for word in ("implemented", "added", "fixed", "updated"))
+                    and any(_matches_candidate(text, candidate) for candidate in candidates)):
+                item = _work_item(session, message, _classify_work(text), text)
+                if not any(existing["text"] == item["text"] for existing in support):
+                    support.append(item)
+    return (users + support)[:8]
 
 
 def _work_item(session: dict, message: dict, kind: str, text: str) -> dict:

@@ -17,8 +17,12 @@ tool (prompt-cache safe).
 
 A **Memory Wiki** tab in `hermes dashboard` (after *Sessions*) with:
 
-- **Subjects** — topics extracted from session titles, file paths, tool names, slash commands,
-  quoted phrases and CamelCase identifiers; each subject page lists related sessions and snippets.
+- **Subjects** — topics derived primarily from every user message, with session titles as
+  secondary evidence and a fallback when user content is absent. Plain-language phrases,
+  explicitly discussed tool identifiers, paths, packages and commands are supported. Assistant
+  text can supply matching context only; it cannot introduce or score topics. Tool, system,
+  developer and tool-call metadata are excluded, as are unverified session previews.
+  Subject snippets prefer user text; daily subjects and work items follow the same policy.
 - **Daily logs** — per-day activity with sessions, subjects and "what we did" work items.
 - **Recent activity** — the ten most recently active sessions.
 - **Persistent Memory** — agent notes and user profile entries, rendered exactly as the memory tool
