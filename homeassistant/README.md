@@ -144,6 +144,33 @@ platforms:
 | `watch_all` | `false` | Receive **all** state changes (not recommended for most setups) |
 | `ignore_entities` | *(none)* | Always ignore these entities (applied before domain/entity filters) |
 | `cooldown_seconds` | `30` | Minimum seconds between events for the same entity |
+| `deliver` | `homeassistant` | Default cross-platform target for forwarded events (e.g. `whatsapp`, `telegram`); the destination is that platform's home channel |
+| `deliver_mode` | `broadcast` | `broadcast` = send the alert to the target chat; `session` = inject the event into that chat's session, so the agent reasons inside its own history (one turn per event) |
+
+#### Cross-platform delivery (`deliver`)
+
+Watched events can be routed to another platform instead of (or in addition to) the Home
+Assistant notification. Entries accept either a plain string or a single-key dict form;
+the dict form sets per-entry options:
+
+```yaml
+platforms:
+  homeassistant:
+    enabled: true
+    extra:
+      deliver: whatsapp            # default target for all watched events
+      deliver_mode: broadcast      # 'broadcast' (default) or 'session'
+      watch_entities:
+        - sensor.front_door_battery
+        - binary_sensor.motion_drive:
+            deliver: telegram       # route this entity to Telegram instead
+            deliver_mode: session   # optional per-entry delivery mode
+```
+
+`deliver_mode: session` integrates with the target chat's agent session: the event is
+injected there with a source tag and an explicit silence contract, and the agent answers
+from within that chat's context (capped by a per-chat rolling-window budget; unmatched
+target sessions degrade to broadcast — a session is never created for an injected event).
 
 Events come from the instance the adapter authenticated to with `HASS_TOKEN`, so they are not
 subject to a user allowlist. The adapter reconnects automatically with 5s → 10s → 30s → 60s backoff.
