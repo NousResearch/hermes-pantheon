@@ -134,6 +134,32 @@ def test_an_options_service_tier_is_routed_to_core(provider):
     assert route["service_tier"] == "ultrafast"
 
 
+def test_an_options_turn_limit_and_idle_timeout_are_routed_to_core_as_written(provider):
+    config = _config(options=[{"name": "scout", "description": "d", "provider": "openrouter", "model": "m",
+                               "max_iterations": 5, "child_timeout_seconds": 120.5},
+                              {"name": "plain", "description": "d", "provider": "openrouter", "model": "m"}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "scout"}, config)
+    assert route["max_iterations"] == 5 and route["child_timeout_seconds"] == 120.5
+    plain = provider.route_task({"goal": "g", "index": 1, "option": "plain"}, config)
+    assert "max_iterations" not in plain and "child_timeout_seconds" not in plain
+
+
+@pytest.mark.parametrize("bad", [0, "15", -1, True, 2.5])
+def test_a_bad_limit_is_passed_through_for_core_to_refuse_not_hidden(provider, bad):
+    # Core owns the rule and the refusal message; the plugin never silently drops the value.
+    config = _config(options=[{"name": "scout", "description": "d", "provider": "openrouter", "model": "m",
+                               "max_iterations": bad, "child_timeout_seconds": bad}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "scout"}, config)
+    assert route["max_iterations"] == bad and route["child_timeout_seconds"] == bad
+
+
+def test_a_blank_limit_is_omitted_like_an_absent_one(provider):
+    config = _config(options=[{"name": "scout", "description": "d", "provider": "openrouter", "model": "m",
+                               "max_iterations": "", "child_timeout_seconds": None}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "scout"}, config)
+    assert "max_iterations" not in route and "child_timeout_seconds" not in route
+
+
 def test_task_without_option_runs_on_the_parent_route_not_delegation_model(provider):
     # In this mode delegation.model / delegation.provider are inactive: an empty route inherits the parent.
     config = {**_config(options=OPTIONS), "model": "m", "provider": "openrouter", "base_url": "http://x/v1"}
