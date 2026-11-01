@@ -608,7 +608,11 @@ def upstream_proxy(upstream):
         proxies['no'] = proxies['no'].replace(' ', ',')  # native also accepts space-separated entries
     if urllib.request.proxy_bypass_environment(f'{upstream.hostname}:{upstream.port or 443}', proxies):
         return None
-    raw = proxies.get('https') or proxies.get('http')
+    raw = (
+        os.environ.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY')
+        or proxies.get('https')
+        or proxies.get('http')
+    )
     if not raw:
         return None
     proxy = urlsplit(raw if '://' in raw else 'http://' + raw)

@@ -66,6 +66,12 @@ def test_proxy_variables_follow_native_order(clean_proxy_env):
         assert _proxy('https://api.example.com')[0] == 'lower.test'
 
 
+def test_dedicated_proxy_variable_precedes_generic_https_proxy(clean_proxy_env):
+    clean_proxy_env.setenv('HTTPS_PROXY', 'http://generic.test:8080')
+    clean_proxy_env.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY', 'http://dedicated.test:9090')
+    assert _proxy('https://api.example.com') == ('dedicated.test', 9090, None)
+
+
 def test_loopback_http_fixture_never_uses_the_proxy(clean_proxy_env):
     clean_proxy_env.setenv('HTTPS_PROXY', 'http://proxy.test:8080')
     clean_proxy_env.setenv('HTTP_PROXY', 'http://proxy.test:8080')
