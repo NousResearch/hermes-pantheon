@@ -269,11 +269,11 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         now = time.time()
         if (now - self._last_event_time.get(entity_id, 0)) < self._cooldown_seconds:
             return
-        self._last_event_time[entity_id] = now
         message = self._format_state_change(
             entity_id, event_data.get("old_state", {}), event_data.get("new_state", {}))
         if not message:
             return
+        self._last_event_time[entity_id] = now
         source = self.build_source(
             chat_id="ha_events", chat_name="Home Assistant Events", chat_type="channel",
             user_id="homeassistant", user_name="Home Assistant")
@@ -288,10 +288,26 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             return None
         old_val = old_state.get("state", "unknown") if old_state else "unknown"
         new_val = new_state.get("state", "unknown")
-        if old_val == new_val:
-            return None
         attrs = new_state.get("attributes", {})
-        template = _DOMAIN_TEMPLATES.get(_domain_of(entity_id), _DEFAULT_TEMPLATE)
+        domain = _domain_of(entity_id)
+        if old_val == new_val:
+            # Only temperature fields are actionable attribute-only climate events.
+            # Ignore unrelated attribute changes.
+            if domain == "climate" and new_val not in {"unknown", "unavailable"}:
+                old_attrs = (old_state or {}).get("attributes", {})
+                changes = [
+                    f"{key}: {old_attrs.get(key, '?')} -> {attrs.get(key, '?')}"
+                    for key in ("current_temperature", "temperature", "target_temp_low", "target_temp_high")
+                    if old_attrs.get(key) != attrs.get(key)
+                ]
+                if changes:
+                    return (f"[Home Assistant] {attrs.get('friendly_name', entity_id)}: "
+                            f"temperature changed ({'; '.join(changes)}; HVAC mode: '{new_val}')")
+            return None
+        template = _DOMAIN_TEMPLATES.get(domain, _DEFAULT_TEMPLATE)
+        if domain in {"switch", "light", "fan", "binary_sensor"} and (
+                old_val not in {"on", "off"} or new_val not in {"on", "off"}):
+            template = _DEFAULT_TEMPLATE
         return template.format(
             name=attrs.get("friendly_name", entity_id), entity_id=entity_id, old=old_val, new=new_val,
             temp=attrs.get("current_temperature", "?"), target=attrs.get("temperature", "?"),
