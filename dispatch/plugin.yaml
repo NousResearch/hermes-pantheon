@@ -1,0 +1,47 @@
+name: dispatch
+label: Dispatch Program
+version: 1.0.0
+manifest_version: 2
+kind: backend
+author: NousResearch
+license: MIT
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/dispatch
+description: >
+  Bring your own sandbox: a terminal backend driven by a program you write.
+  Hermes runs it to spawn, exec in, pause and delete one sandbox per session,
+  so Docker, Kubernetes, Apple containers, E2B or any VM pool becomes a Hermes
+  backend in a 20-line script, with no Hermes code. Skills and credential
+  files sync in over the same exec job. Select it with
+  `hermes config set terminal.backend dispatch`.
+requires_hermes: ">=0.22.4"
+platforms: [linux, macos]
+tags: [terminal, sandbox, remote, docker, kubernetes]
+provides_tools: []
+provides_hooks: []
+capabilities: []
+config_schema:
+  program:
+    type: str
+    default: ""
+    label: Dispatch program
+    description: "Path (or command line) of your program. Hermes runs it as `<program> spawn|exec|pause|delete <sandbox-id> [argv...]`. See the plugin README for Docker and Kubernetes examples."
+  image:
+    type: str
+    default: ""
+    label: Image
+    description: "Passed to the program as HERMES_SANDBOX_IMAGE. Empty means Hermes' default sandbox image."
+  disposable:
+    type: bool
+    default: false
+    label: Disposable sandbox
+    description: "Skip dangerous-command approval prompts, as for Docker. Turn on only when your program never runs commands on this machine."
+  sync_files:
+    type: bool
+    default: true
+    label: Sync skills and credential files
+    description: "Copy skills, registered credential files and the cache into ~/.hermes inside the sandbox over the exec job (needs tar in the sandbox)."
+  spawn_timeout:
+    type: int
+    default: 300
+    label: Spawn timeout (seconds)
+    description: "How long a spawn job may take (image pulls, cold starts)."

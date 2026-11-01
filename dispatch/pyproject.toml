@@ -1,0 +1,13 @@
+[project]
+name = "hermes-dispatch"
+version = "1.0.0"
+description = "Dispatch-program terminal backend for Hermes Agent: bring your own sandbox (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+# No Python dependencies: your dispatch program drives whatever platform CLI or SDK it needs.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/dispatch"

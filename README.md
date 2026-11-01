@@ -226,6 +226,11 @@ Catalog entries come in two tiers:
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
 <td width="50%" valign="top">
+<a href="dispatch/"><img src="assets/dispatch.jpg" alt="Dispatch plugin"></a>
+<h3><a href="dispatch/">Dispatch</a></h3>
+<code>hermes plugins install dispatch</code>
+<p>Bring your own sandbox. A terminal backend driven by a short program you write: Hermes runs it to spawn, exec in, pause and delete one sandbox per session, so Docker, Kubernetes, Apple containers, E2B or a VM pool become a Hermes backend with no Hermes code. Idle sessions pause their sandbox and the next command resumes it; skills and credential files sync in over the same exec job. Docker and Kubernetes examples included.</p>
+<p>Terminal backend <code>terminal.backend: dispatch</code> · Linux, macOS</p>
 </td>
 </tr>
 </table>
