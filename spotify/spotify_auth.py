@@ -155,46 +155,91 @@ def _loopback_tls_context() -> ssl.SSLContext:
 
     cache_dir = Path(get_hermes_home()) / "cache" / "spotify-loopback"
     cert_path, key_path = cache_dir / "cert.pem", cache_dir / "key.pem"
-    if not (cert_path.exists() and key_path.exists()):
-        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _load_cached() -> ssl.SSLContext:
+        context = _server_ssl_context_class()(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        return context
+
+    # Reuse a cached pair only if it still loads; a truncated/corrupt pair is
+    # regenerated once instead of wedging every subsequent login.
+    if cert_path.exists() and key_path.exists():
         try:
-            import datetime as dt
-            import ipaddress
+            return _load_cached()
+        except (ssl.SSLError, OSError, ValueError):
+            for path in (cert_path, key_path):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
 
-            from cryptography import x509
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import rsa
-            from cryptography.x509.oid import NameOID
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        import datetime as dt
+        import ipaddress
+        import os as _os
+        import tempfile
 
-            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-            now = dt.datetime.now(dt.timezone.utc)
-            certificate = (
-                x509.CertificateBuilder()
-                .subject_name(name).issuer_name(name)
-                .public_key(key.public_key())
-                .serial_number(x509.random_serial_number())
-                .not_valid_before(now - dt.timedelta(minutes=5))
-                .not_valid_after(now + dt.timedelta(days=397))
-                .add_extension(x509.SubjectAlternativeName([
-                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-                    x509.DNSName("localhost"),
-                ]), critical=False)
-                .sign(key, hashes.SHA256())
-            )
-            key_path.write_bytes(key.private_bytes(
-                serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
-                serialization.NoEncryption()))
-            cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-            os.chmod(key_path, 0o600)
-        except ImportError as exc:  # pragma: no cover - cryptography ships with Hermes
-            raise _err(
-                "Serving the Spotify https callback needs the 'cryptography' package. "
-                "Install it, or register the http loopback URI if your app still allows it.",
-                "spotify_tls_unavailable") from exc
-    context = _server_ssl_context_class()(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
-    return context
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+        now = dt.datetime.now(dt.timezone.utc)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - dt.timedelta(minutes=5))
+            .not_valid_after(now + dt.timedelta(days=397))
+            .add_extension(x509.SubjectAlternativeName([
+                x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                x509.DNSName("localhost"),
+            ]), critical=False)
+            .sign(key, hashes.SHA256())
+        )
+        key_bytes = key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption())
+        cert_bytes = certificate.public_bytes(serialization.Encoding.PEM)
+
+        def _atomic_write(path: Path, data: bytes, mode: int) -> None:
+            fd, tmp = tempfile.mkstemp(dir=str(cache_dir), prefix=f".{path.name}.")
+            try:
+                try:
+                    if hasattr(_os, "fchmod"):
+                        _os.fchmod(fd, mode)
+                except (OSError, AttributeError):
+                    pass
+                with _os.fdopen(fd, "wb") as stream:
+                    stream.write(data)
+                    stream.flush()
+                    _os.fsync(stream.fileno())
+                _os.replace(tmp, path)
+                try:
+                    _os.chmod(path, mode)
+                except OSError:
+                    pass
+            except BaseException:
+                try:
+                    _os.unlink(tmp)
+                except FileNotFoundError:
+                    pass
+                raise
+
+        # Key is created owner-only (0600) and both files appear atomically.
+        _atomic_write(key_path, key_bytes, 0o600)
+        _atomic_write(cert_path, cert_bytes, 0o644)
+    except ImportError as exc:  # pragma: no cover - cryptography ships with Hermes
+        raise _err(
+            "Serving the Spotify https callback needs the 'cryptography' package. "
+            "Install it, or register the http loopback URI if your app still allows it.",
+            "spotify_tls_unavailable") from exc
+    return _load_cached()
+
 
 
 def _wait_for_callback(redirect_uri: str, *, timeout_seconds: float = 180.0) -> dict[str, Any]:
