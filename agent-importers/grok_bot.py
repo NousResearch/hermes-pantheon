@@ -115,7 +115,16 @@ def find_export_files(source: Optional[Path]) -> list[Path]:
     if not folder.is_dir():
         return []
     patterns = ("*.json", "*.md", "*.txt") if source is not None else _EXPORT_GLOBS
-    return sorted({p for pattern in patterns for p in folder.glob(pattern) if p.is_file()})
+    return sorted({p for pattern in patterns for p in folder.glob(pattern)
+                   if p.is_file() and _mentions_export_format(p)})
+
+
+def _mentions_export_format(path: Path) -> bool:
+    """Cheap filter so a folder scan skips unrelated files instead of reporting them as errors."""
+    try:
+        return EXPORT_FORMAT in read_text(path)
+    except OSError:
+        return False
 
 
 class ExportFormatError(ValueError):
