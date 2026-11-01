@@ -177,7 +177,7 @@ Catalog entries come in two tiers:
 <a href="bubblewrap/"><img src="assets/bubblewrap.jpg" alt="Bubblewrap plugin"></a>
 <h3><a href="bubblewrap/">Bubblewrap</a></h3>
 <code>hermes plugins install bubblewrap</code>
-<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. The file tools (<code>read_file</code>, <code>write_file</code>, <code>patch</code>, <code>search_files</code>) run on the host, outside the sandbox.</p>
+<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. With current Hermes core, the file tools (<code>read_file</code>, <code>write_file</code>, <code>patch</code>, <code>search_files</code>) use the sandbox's filesystem view too; see the plugin README for older-core behavior.</p>
 <p>Terminal backend <code>terminal.backend: bubblewrap</code> · Linux</p>
 </td>
 <td width="50%" valign="top">
