@@ -955,6 +955,12 @@ class Client:
                             yield self._chunk(kwargs['model'], {'content': delta['text']})
                         elif delta.get('type') == 'thinking_delta':
                             yield self._chunk(kwargs['model'], {'reasoning_content': delta['thinking']})
+                        elif native['type'] not in ('message_stop', 'ping'):
+                            # The model is working but has nothing to show: tool-call arguments (input_json_delta),
+                            # thinking signatures, block boundaries. Hermes' stale detector only sees chunks, so
+                            # without this a long tool call looks like a stall and the host kills a healthy request.
+                            # A ping stays silent: it proves the connection is open, not that the model is working.
+                            yield self._chunk(kwargs['model'], {})
                 if fast:
                     with request.lock:
                         admission = request.admission
