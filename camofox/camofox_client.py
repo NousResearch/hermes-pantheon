@@ -246,6 +246,41 @@ def delete(path: str, body: Optional[dict] = None, timeout: Optional[int] = None
     return request("delete", path, timeout, json=body).json()
 
 
+# Cold-start retry budget (seconds) for the first tab create of an idle server: the retry must
+# outlast the server's own in-flight context build even when browser.command_timeout is small.
+_TAB_CREATE_RETRY_TIMEOUT_S = 60
+
+
+def _is_cold_start_tab_create_error(exc: requests.RequestException) -> bool:
+    """True for the cold-start failure signatures on ``POST /tabs``: a 5xx answer, or a client-side
+    timeout while the server is still building the browser session. 4xx is a request error and is
+    never retried."""
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(exc.response, "status_code", None)
+        return status is not None and status >= 500
+    return isinstance(exc, requests.Timeout)
+
+
+def create_tab(body: dict) -> dict:
+    """``POST /tabs`` with one transparent retry on the cold-start failure.
+
+    After the server's idle shutdown the first ``POST /tabs`` pays for launching Camoufox and
+    building a context with the persisted storage state — measured 25-30 s against the server's
+    30 s tab-create route budget (camofox-browser ``tabCreateRequestTimeoutMs``), so it answers
+    500 ``tab create timed out after 30000ms`` *while the coalesced build is still finishing*.
+    The build completes just after the 500, so a single retry lands on the warm path (~1 s
+    measured). Other routes are unaffected; a second failure keeps the original raise-for-status
+    semantics.
+    """
+    try:
+        return post("/tabs", body)
+    except requests.RequestException as exc:
+        if not _is_cold_start_tab_create_error(exc):
+            raise
+        logger.info("camofox tab create failed cold (%s); retrying once", exc)
+        return post("/tabs", body, timeout=max(get_command_timeout(), _TAB_CREATE_RETRY_TIMEOUT_S))
+
+
 def connection_error_message() -> str:
     return (f"Cannot connect to Camofox at {get_camofox_url()}. Is the server running? "
             f"Start with: npm start (in camofox-browser dir) or: {_DOCKER_HINT}")
@@ -342,7 +377,7 @@ def ensure_tab(task_id: Optional[str], url: str = "about:blank") -> dict[str, An
     """The task's session with a tab, creating one at ``url`` if needed."""
     session = get_session(task_id)
     if not session["tab_id"]:
-        data = post("/tabs", {"userId": session["user_id"], "listItemId": session["session_key"], "url": url})
+        data = create_tab({"userId": session["user_id"], "listItemId": session["session_key"], "url": url})
         session["tab_id"] = data.get("tabId")
     return session
 
