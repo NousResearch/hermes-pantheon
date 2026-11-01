@@ -70,6 +70,8 @@ def _call(server, name, args):
     ("browser_navigate", {"query": "q", "url": "javascript:alert(1)"}),
     ("vision_analyze", {"query": "q", "image_url": "/home/me/.hermes/.env"}),
     ("vision_analyze", {"query": "q", "image_url": "~/secret.png"}),
+    ("vision_analyze", {"query": "q", "image_url": "secret.png"}),
+    ("vision_analyze", {"query": "q", "image_url": "screenshots/secret.png"}),
 ])
 def test_tools_mode_refuses_local_files_before_dispatch(real_tools, tool, args):
     server = bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True)

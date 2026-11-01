@@ -42,9 +42,12 @@ EXPOSED_TOOLS: tuple[str, ...] = (
 
 # Arguments an MCP client may not set: they write outside Hermes' cache.
 _DROPPED_ARGS: dict[str, tuple[str, ...]] = {"text_to_speech": ("output_path",)}
-# (argument, data: URLs allowed) that must be web URLs, never local paths or file:/javascript: URLs.
-_URL_ARGS: dict[str, tuple[str, bool]] = {
-    "browser_navigate": ("url", False), "web_extract": ("urls", False), "vision_analyze": ("image_url", True),
+# (argument, data: URLs allowed, bare hosts allowed) that must be web URLs, never local paths or
+# file:/javascript: URLs. vision_analyze reads any scheme-less source (``pic.png``, ``shots/a.png``) as a
+# file path, so it needs an explicit scheme.
+_URL_ARGS: dict[str, tuple[str, bool, bool]] = {
+    "browser_navigate": ("url", False, True), "web_extract": ("urls", False, True),
+    "vision_analyze": ("image_url", True, False),
 }
 _SCHEME_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9+.-]*):(?!\d)")
 _JSON_TO_PY = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}
@@ -68,23 +71,24 @@ def _signature_from_schema(schema: dict | None) -> tuple[inspect.Signature, dict
     return inspect.Signature(params, return_annotation=str), annots
 
 
-def _is_web_url(value: Any, *, allow_data: bool) -> bool:
-    """http(s) URL or a bare host (``example.com``, ``localhost:8080``); ``data:`` only if allowed."""
+def _is_web_url(value: Any, *, allow_data: bool, allow_bare: bool = True) -> bool:
+    """http(s) URL or, if allowed, a bare host (``example.com``, ``localhost:8080``); ``data:`` only if
+    allowed."""
     text = str(value or "")
     match = _SCHEME_RE.match(text)
     if match is None:
-        return bool(text.strip()) and not text.lstrip().startswith(("/", "~", "\\", "."))
+        return allow_bare and bool(text.strip()) and not text.lstrip().startswith(("/", "~", "\\", "."))
     return match.group(1).lower() in ({"http", "https", "data"} if allow_data else {"http", "https"})
 
 
 def _refusal(tool_name: str, args: dict) -> Optional[str]:
     """Why *args* may not reach *tool_name* from an MCP client, else None."""
-    arg, allow_data = _URL_ARGS.get(tool_name, ("", False))
+    arg, allow_data, allow_bare = _URL_ARGS.get(tool_name, ("", False, True))
     value = args.get(arg) if arg else None
     if value is None:
         return None
     values = value if isinstance(value, list) else [value]
-    bad = [v for v in values if not _is_web_url(v, allow_data=allow_data)]
+    bad = [v for v in values if not _is_web_url(v, allow_data=allow_data, allow_bare=allow_bare)]
     if not bad:
         return None
     kinds = "http(s) or data: URLs" if allow_data else "http(s) URLs"
