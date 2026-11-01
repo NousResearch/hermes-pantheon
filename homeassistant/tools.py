@@ -651,10 +651,80 @@ async def _async_call_service(
                 f"of their own domain — call {actual_domain}.{service} instead."
             )
             return out
-        # Exists in the right domain: the state was already as requested — intent satisfied.
-        out["success"] = True
-        del out["error"]
-        out["note"] = f"{entity_id} was already in state '{state['state']}' — nothing to change."
+        return await _verify_unchanged_entity(out, domain, service, entity_id, state.get("state"))
+    return out
+
+
+# How long to wait for a device that confirms after the service call returns (#213): a Zigbee or
+# Wi-Fi plug flips its state ~150-300 ms after HA answers, so HA's empty "changed states" list
+# does not mean the call was a no-op. Re-read the state at these intervals (1.5 s in all).
+_STATE_CONFIRM_DELAYS = (0.25, 0.5, 0.75)
+
+# Services that name the state they put an entity in, and the states that satisfy them.
+_TARGET_STATES = {
+    "turn_off": ("off",),
+    "lock": ("locked",),
+    "unlock": ("unlocked",),
+    "open": ("open",),
+    "open_cover": ("open",),
+    "close_cover": ("closed",),
+    "open_valve": ("open",),
+    "close_valve": ("closed",),
+}
+
+
+def _requested_state_reached(service: str, state: Any) -> Optional[bool]:
+    """Whether *state* is the state *service* asks for; None when the service names no state.
+
+    ``toggle`` always asks for a change, so it is never already satisfied. ``turn_on`` is met by
+    any active state: a media player or climate entity reports ``playing``/``heat``, not ``on``.
+    """
+    if service == "toggle":
+        return False
+    if service == "turn_on":
+        return state not in ("off", "unavailable", "unknown", None)
+    targets = _TARGET_STATES.get(service)
+    return None if targets is None else state in targets
+
+
+async def _verify_unchanged_entity(
+    out: Dict[str, Any], domain: str, service: str, entity_id: str, observed: Any,
+) -> Dict[str, Any]:
+    """HA accepted the call and reported no changed state for an entity that exists in the right
+    domain. Say what actually happened instead of assuming the request was already satisfied."""
+    del out["error"]
+    out["success"] = True
+    reached = _requested_state_reached(service, observed)
+    if reached:
+        out["note"] = f"{entity_id} was already in state '{observed}' — nothing to change."
+        return out
+    if reached is None:
+        # No target state to compare with (set_cover_position, set_temperature, ...).
+        out["note"] = (
+            f"{domain}.{service} was accepted; Home Assistant reported no state change for "
+            f"{entity_id} (state '{observed}'). Check with ha_get_state if the change matters."
+        )
+        return out
+    current, recheck_failed = observed, False
+    for delay in _STATE_CONFIRM_DELAYS:
+        await asyncio.sleep(delay)
+        try:
+            current = (await _api_json("GET", f"/api/states/{entity_id}", 5)).get("state")
+        except Exception:
+            recheck_failed = True
+            break
+        moved = current != observed and current not in ("unavailable", "unknown", None)
+        if moved or _requested_state_reached(service, current):
+            out["affected_entities"] = [{"entity_id": entity_id, "state": current}]
+            out["note"] = f"{entity_id} is now '{current}' (the device confirmed after the call returned)."
+            return out
+    out["success"] = False
+    waited = "could not be re-checked" if recheck_failed else f"after {sum(_STATE_CONFIRM_DELAYS):g} s"
+    still = "still " if current == observed else ""
+    out["error"] = (
+        f"{domain}.{service} was accepted but {entity_id} is {still}'{current}' ({waited}): the device "
+        "may be offline or slow to confirm. Check it with ha_get_state before retrying."
+    )
     return out
 
 
@@ -903,7 +973,7 @@ HA_CALL_SERVICE_SCHEMA: Dict[str, Any] = {
         "switch.* entity needs switch.turn_on, an input_boolean.* toggle needs "
         "input_boolean.turn_on — calling the wrong domain affects nothing. The "
         "error field explains exactly what went wrong (missing entity, wrong "
-        "domain, or already in that state) — follow its suggestion and retry. "
+        "domain, or a device that has not confirmed the change) — follow its suggestion. "
         "If the operator restricts entities, target explicit entity_ids: calls "
         "on restricted entities, or by area/device/label or with no target, are refused."
     ),

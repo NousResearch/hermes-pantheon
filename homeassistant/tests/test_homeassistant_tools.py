@@ -196,6 +196,100 @@ class TestCallServiceVerification:
         assert "already in state" in result["note"]
         assert "error" not in result
 
+    # -- devices that confirm after the call returns (#213) ------------------------------------
+    # A Zigbee/Wi-Fi plug or bulb flips its state only when the device confirms, ~150-300 ms
+    # after POST /api/services returns [], so the first state read still shows the old state.
+
+    def _call_with_states(self, states, domain, service, entity):
+        """POST returns []; successive GET /api/states reads return *states* in order (the last repeats)."""
+        reads = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return []
+            if method == "GET" and path == f"/api/states/{entity}":
+                reads.append(path)
+                return {"entity_id": entity, "state": states[min(len(reads), len(states)) - 1]}
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json), \
+                patch.object(ha_tool.asyncio, "sleep", side_effect=fake_sleep):
+            result = asyncio.run(_async_call_service(domain, service, entity, None))
+        return result, len(reads), sleeps
+
+    def test_turn_off_on_a_device_that_confirms_late_reports_the_new_state(self):
+        result, reads, _ = self._call_with_states(["on", "on", "off"], "switch", "turn_off", "switch.plug")
+        assert result["success"] is True and "error" not in result
+        assert "already" not in result["note"]
+        assert "now 'off'" in result["note"]
+        assert result["affected_entities"] == [{"entity_id": "switch.plug", "state": "off"}]
+        assert reads == 3
+
+    def test_turn_on_that_never_confirms_is_an_actionable_error_not_a_noop(self):
+        result, reads, sleeps = self._call_with_states(["off"], "light", "turn_on", "light.bulb")
+        assert result["success"] is False
+        assert "already" not in result["error"]
+        assert "still 'off'" in result["error"] and "ha_get_state" in result["error"]
+        assert reads == 1 + len(ha_tool._STATE_CONFIRM_DELAYS)
+        assert sum(sleeps) <= 2.0  # the wait for a confirmation stays short
+
+    def test_a_true_noop_answers_from_one_read_without_waiting(self):
+        result, reads, sleeps = self._call_with_states(["on"], "switch", "turn_on", "switch.plug")
+        assert result["success"] is True and "already in state 'on'" in result["note"]
+        assert reads == 1 and sleeps == []
+
+    def test_turn_on_is_reached_by_any_on_like_state(self):
+        # media_player / climate report playing, idle, heat ... once on, never the literal "on".
+        result, reads, _ = self._call_with_states(["idle"], "media_player", "turn_on", "media_player.tv")
+        assert result["success"] is True and "already in state 'idle'" in result["note"]
+        assert reads == 1
+
+    def test_toggle_is_never_already_satisfied(self):
+        result, _, _ = self._call_with_states(["on", "off"], "light", "toggle", "light.bulb")
+        assert result["success"] is True and "already" not in result["note"]
+        assert result["affected_entities"] == [{"entity_id": "light.bulb", "state": "off"}]
+
+    def test_a_lock_moving_through_locking_counts_as_confirmed(self):
+        result, _, _ = self._call_with_states(["unlocked", "locking"], "lock", "lock", "lock.door")
+        assert result["success"] is True and "now 'locking'" in result["note"]
+
+    def test_a_service_without_a_target_state_does_not_claim_it_was_already_satisfied(self):
+        # set_cover_position names no state; an unchanged state proves nothing either way.
+        result, reads, sleeps = self._call_with_states(["open"], "cover", "set_cover_position", "cover.blind")
+        assert result["success"] is True and "error" not in result
+        assert "already" not in result["note"] and "'open'" in result["note"]
+        assert reads == 1 and sleeps == []
+
+    def test_a_device_dropping_to_unavailable_is_not_reported_as_confirmed(self):
+        result, _, _ = self._call_with_states(["on", "unavailable"], "switch", "turn_off", "switch.plug")
+        assert result["success"] is False
+        assert "'unavailable'" in result["error"] and "still" not in result["error"]
+
+    def test_a_failed_recheck_while_waiting_is_reported_not_raised(self):
+        reads = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return []
+            reads.append(path)
+            if len(reads) == 1:
+                return {"entity_id": "switch.plug", "state": "on"}
+            raise asyncio.TimeoutError()
+
+        async def no_sleep(_seconds):
+            return None
+
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json), \
+                patch.object(ha_tool.asyncio, "sleep", side_effect=no_sleep):
+            result = asyncio.run(_async_call_service("switch", "turn_off", "switch.plug", None))
+        assert result["success"] is False
+        assert "still 'on'" in result["error"] and "already" not in result["error"]
+
     def test_verification_failure_other_than_404_is_not_reported_as_missing(self):
         # A 401/500/timeout on the verification GET says nothing about whether the entity exists.
         async def fake_api_json(method, path, timeout, payload=None):
