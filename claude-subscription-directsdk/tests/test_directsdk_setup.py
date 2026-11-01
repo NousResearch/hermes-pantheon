@@ -226,6 +226,30 @@ def test_hermes_never_budgets_a_discovered_row_past_the_native_window(profile, t
         assert get_model_context_length(m["id"], provider=profile.name, base_url=profile.base_url) <= native, m["id"]
 
 
+@pytest.mark.parametrize("auth", [
+    {"loggedIn": True, "authMethod": "api_key", "apiProvider": "firstParty"},
+    {"loggedIn": True, "authMethod": "api_key_helper", "apiProvider": "firstParty"},
+    {"loggedIn": True, "authMethod": "third_party", "apiProvider": "anthropicAws"},
+    {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "gateway", "subscriptionType": "max"},
+])
+def test_a_login_that_bills_api_usage_is_not_a_subscription_login(profile, tmp_path, auth):
+    """`auth status` reports loggedIn for a Console key or cloud backend too; setup must not pass it as a subscription."""
+    command, env = _cli(tmp_path, {"auth": auth, "account": {}, "models": PINNED_PICKER})
+    status = profile.setup_status(command=command, env=env)
+    assert status["available"] and not status["logged_in"]
+    assert "bills API usage instead of your Claude subscription" in status["detail"]
+    assert status["login_command"] == command + ["auth", "login"]
+    assert profile.discover_models(command=command, env=env) is None
+
+
+def test_a_setup_token_login_without_a_plan_is_a_subscription_login(profile, tmp_path):
+    """`claude setup-token` / CLAUDE_CODE_OAUTH_TOKEN reports oauth_token and no subscriptionType; it stays valid."""
+    command, env = _cli(tmp_path, {"auth": {"loggedIn": True, "authMethod": "oauth_token", "apiProvider": "firstParty"},
+                                   "account": {"subscriptionType": "Claude Max"}, "models": PINNED_PICKER})
+    status = profile.setup_status(command=command, env=env)
+    assert status["logged_in"] and status["detail"] == ""
+
+
 def test_logged_out_or_missing_cli_degrades_to_pinned_catalog(profile, tmp_path):
     command, env = _cli(tmp_path, {"auth": {"loggedIn": False, "authMethod": "none"}, "account": {}, "models": []})
     status = profile.setup_status(command=command, env=env)

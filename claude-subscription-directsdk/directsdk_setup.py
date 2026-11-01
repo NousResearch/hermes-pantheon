@@ -23,6 +23,10 @@ except ImportError:
 INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH or in the usual install directories). Install it with "
                 "`npm install -g @anthropic-ai/claude-code` or set CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND to the binary.")
 LOGIN_HINT = "Claude Code is installed but not logged in. Run `claude auth login`, then select this provider again."
+# How `auth status` says native would authenticate, for logins that bill API usage rather than the subscription.
+_METERED_AUTH = {"api_key": "an Anthropic API key", "api_key_helper": "an API key helper", "third_party": "a third-party cloud login"}
+METERED_HINT = ("Claude Code would sign in with {0}, which bills API usage instead of your Claude subscription. Run `claude auth login` "
+                "with your Claude account (and unset ANTHROPIC_API_KEY in Hermes' environment if it is set), then select this provider again.")
 LOGGED_OUT_HINT = ("Claude Code is installed but has no usable login in the environment Hermes runs it in. Run `claude auth login` "
                    "as the user Hermes runs as, set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in Hermes' environment, "
                    "or point the claude_config_dir plugin setting (or CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR) "
@@ -156,6 +160,11 @@ def setup_status(command=None, env=None, timeout=20):
     logged_in = auth.get("loggedIn") is True
     plan = str(auth.get("subscriptionType") or "")
     detail = "" if logged_in else LOGIN_HINT
+    # loggedIn is also true for a Console API key or a cloud backend; requests would then bill API usage.
+    provider = str(auth.get("apiProvider") or "firstParty")
+    metered = _METERED_AUTH.get(auth.get("authMethod")) or (f"the {provider} backend" if provider != "firstParty" else None)
+    if logged_in and metered:
+        logged_in, detail = False, METERED_HINT.format(metered)
     return {"available": True, "logged_in": logged_in, "plan": _plan_label(plan), "detail": detail,
             "login_command": login_command}
 
