@@ -22,6 +22,8 @@ FAKE_BASH = "/opt/fake/bash"
 def env_factory(tmp_path, monkeypatch):
     monkeypatch.setenv("TERMINAL_SANDBOX_DIR", str(tmp_path / "sandboxes"))
     monkeypatch.setattr(sandbox, "_probed_bwrap_path", "/usr/bin/bwrap")
+    # The process limit probe spawns bwrap once per process; pin its result so it never runs under popen_spy.
+    monkeypatch.setattr(sandbox, "_process_limit_scoped", True)
     work = tmp_path / "work"
     work.mkdir()
     made = []

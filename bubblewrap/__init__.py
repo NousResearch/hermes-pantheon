@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_NAME = "bubblewrap"
 PROMPT_SECTION_ID = "bubblewrap-sandbox"
-SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow")
+SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow", "hide")
 
 _PROFILE_CHOICES = (
     ("restricted", "restricted - read-only working directory, no network"),

@@ -25,6 +25,7 @@ from bubblewrap_plugin.sandbox import (
     masked_inside,
     resolve_bind_dests,
     runtime_overlay_args,
+    sandbox_dir_views,
     sensitive_paths,
 )
 
@@ -734,3 +735,29 @@ class TestHiddenCaBundles:
         assert not masked_inside(argv, str(bundle))
         assert masked_inside(argv, str(hermes_home / "config.yaml"))
         assert str(bundle) not in build(paths=paths, hidden_paths=hidden, ca_bundles=())
+
+
+class TestSandboxDirViews:
+    def test_a_bind_of_a_parent_elsewhere_is_a_second_view(self, tmp_path):
+        stage = tmp_path / "stage"
+        root = stage / "sandboxes"
+        root.mkdir(parents=True)
+        binds = (
+            BindMount(str(stage), "/mnt/mirror", True),
+            BindMount(str(stage), str(stage), True),  # at its own path: the same view
+            BindMount(str(tmp_path / "other"), "/mnt/other", True),
+        )
+        assert sandbox_dir_views(str(root), binds) == ("/mnt/mirror/sandboxes",)
+
+    def test_each_view_gets_a_tmpfs_and_a_read_only_remount(self, paths, tmp_path):
+        stage = tmp_path / "stage"
+        root = stage / "sandboxes"
+        root.mkdir(parents=True)
+        config = BubblewrapConfig(binds=(BindMount(str(stage), "/mnt/mirror", True),))
+        argv = build(config, paths=paths, sandbox_root=str(root))
+        view = "/mnt/mirror/sandboxes"
+        i_bind = next(i for i, a in enumerate(argv) if a == "--ro-bind" and argv[i + 2] == "/mnt/mirror")
+        i_tmpfs = next(i for i, a in enumerate(argv) if a == "--tmpfs" and argv[i + 1] == view)
+        i_remount = next(i for i, a in enumerate(argv) if a == "--remount-ro" and argv[i + 1] == view)
+        assert i_bind < i_tmpfs < i_remount < argv.index("--chdir")
+        assert build(config, paths=paths).count(view) == 0

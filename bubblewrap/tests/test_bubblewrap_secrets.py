@@ -41,6 +41,7 @@ from tools.environments.local import LocalEnvironment
 def _bwrap_probe_passed(monkeypatch):
     """Unit constructions never spawn: count the process-wide bwrap probe as passed."""
     monkeypatch.setattr(bubblewrap, "_probed_bwrap_path", shutil.which("bwrap") or "/usr/bin/bwrap")
+    monkeypatch.setattr(bubblewrap, "_process_limit_scoped", True)
 
 MARKER = "HERMES-SECRET-MARKER"
 VISIBLE = "HERMES-VISIBLE-MARKER"
@@ -543,6 +544,43 @@ class TestHermesHomeIntegration:
         assert (default_home / "auth.json").read_text() == f'{{"token": "{MARKER}"}}\n'
 
 
+@needs_bwrap
+class TestOtherEnvironmentStateIntegration:
+    """A sandbox dir outside HERMES_HOME holds the state dir of every
+    environment: the shell snapshot and the scripts of its execute_code
+    calls. No other environment may read them, also not through an
+    operator bind that shows the sandbox dir at a second path."""
+
+    def test_state_of_another_environment_is_not_visible_through_a_bind(self, host_dir, work_dir, monkeypatch):
+        stage = host_dir / "stage"
+        root = stage / "sandboxes"
+        root.mkdir(parents=True)
+        monkeypatch.setenv("TERMINAL_SANDBOX_DIR", str(root))
+        # The parent of the sandbox dir once more, read-only at another path.
+        mirror = work_dir / "mirror"
+        config = BubblewrapConfig(binds=(BindMount(str(stage), str(mirror), True),))
+        first = BubblewrapEnvironment(cwd=str(work_dir), timeout=30)
+        second = BubblewrapEnvironment(cwd=str(work_dir), timeout=30, config=config)
+        try:
+            assert second._config.binds, "the bind under test was dropped"
+            theirs = Path(first.get_temp_dir())
+            assert theirs.parent == root
+            _write(theirs / "note.txt")
+            assert first.execute(f"cat {theirs}/note.txt")["output"].strip() == MARKER
+            out = second.execute(
+                f"ls -A {root} {mirror}/sandboxes 2>&1; "
+                f"cat {theirs}/note.txt {root}/*/* {mirror}/sandboxes/*/* 2>&1"
+            )["output"]
+            assert MARKER not in out
+            assert theirs.name not in out.replace(f"{theirs}/note.txt: No such file", "")
+            # Its own state dir still works: the shell state survives.
+            assert second.execute("export KEPT=1")["returncode"] == 0
+            assert second.execute("echo $KEPT")["output"].strip() == "1"
+        finally:
+            first.cleanup()
+            second.cleanup()
+
+
 class TestHomeModeCarveOut:
     """HERMES_HOME/home is bound back over the overlay only under home_mode=profile."""
 
@@ -952,6 +990,16 @@ class TestHomeDefaultDenyIntegration:
             env.cleanup()
 
 
+    def test_hide_key_hides_a_non_dot_path(self, sandbox_root, deny_home):
+        _write(deny_home / "Documents" / "keys" / "id")
+        _write(deny_home / "Documents" / "notes.txt", VISIBLE)
+        env = self._env(deny_home / "proj", config=BubblewrapConfig(hide=("~/Documents/keys",)))
+        try:
+            assert MARKER not in env.execute(f"cat {deny_home}/Documents/keys/id 2>&1")["output"]
+            assert env.execute(f"cat {deny_home}/Documents/notes.txt")["output"].strip() == VISIBLE
+        finally:
+            env.cleanup()
+
 @needs_bwrap
 class TestCoveredDefaultDenyDirIntegration:
     """A bind on ~/.local covers the tmpfs of ~/.local/share below it: the
@@ -1001,3 +1049,28 @@ class TestCoveredDefaultDenyDirIntegration:
         assert (local / "share" / "app" / "new").read_text() == "ok"
 
 
+@needs_bwrap
+class TestHideUnderHermesHomeIntegration:
+    """A hide entry under HERMES_HOME where the backend binds a directory back
+    on top of the HERMES_HOME overlay."""
+
+    def test_hide_entry_equal_to_the_scratch_dir_leaves_the_sandbox_its_own_scratch(self, work_dir, hermes_home):
+        scratch = hermes_home / "cache" / "scratch"
+        _write(scratch / "secret.txt")
+        env = BubblewrapEnvironment(cwd=str(work_dir), timeout=30, config=BubblewrapConfig(hide=(str(scratch),)))
+        try:
+            assert MARKER not in env.execute(f"cat {scratch}/secret.txt 2>&1")["output"]
+            assert env.execute(f"printf kept > {scratch}/probe")["returncode"] == 0
+            assert env.execute(f"cat {scratch}/probe")["output"].strip() == "kept"
+        finally:
+            env.cleanup()
+        assert not (scratch / "probe").exists()
+
+    def test_hide_entry_inside_the_profile_home_is_refused(self, work_dir, hermes_home):
+        # The profile home is bound read-write on top of the overlay, so a
+        # hidden path inside it would show again: the backend does not start.
+        keys = hermes_home / "home" / "a" / "keys"
+        _write(keys / "id")
+        config = BubblewrapConfig(home_mode="profile", hide=(str(keys),))
+        with pytest.raises(ValueError, match="terminal.home_mode"):
+            BubblewrapEnvironment(cwd=str(work_dir), timeout=30, config=config)
