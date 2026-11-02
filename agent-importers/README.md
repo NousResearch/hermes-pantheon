@@ -4,7 +4,7 @@
 
 > Part of the [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Formerly built into Hermes Agent core (`hermes_cli/agent_import.py`, and for OpenClaw `hermes_cli/claw.py` with the `openclaw-migration` optional skill).
 
-`hermes import-agent` brings an existing **OpenClaw** (`~/.openclaw`), **Claude Code** (`~/.claude`), **OpenAI Codex CLI** (`~/.codex`), **Cursor** (`~/.cursor`) or **Grok Bot** setup into Hermes with one command. Every run shows a per-item preview first and `--dry-run` never touches disk. API keys and credentials are never imported, with one opt-in exception: OpenClaw's allowlisted secrets when you pass `--migrate-secrets`.
+`hermes import-agent` brings an existing **OpenClaw** (`~/.openclaw`), **Claude Code** (`~/.claude`), **OpenAI Codex CLI** (`~/.codex`), **Cursor** (`~/.cursor`), **Grok Bot** or **OpenBot** setup into Hermes with one command. Every run shows a per-item preview first and `--dry-run` never touches disk. API keys and credentials are never imported, with one opt-in exception: OpenClaw's allowlisted secrets when you pass `--migrate-secrets`.
 
 | Agent | Command | Default source |
 |---|---|---|
@@ -13,6 +13,7 @@
 | Codex CLI | `hermes import-agent codex` | `~/.codex` |
 | Cursor | `hermes import-agent cursor` | `~/.cursor` |
 | Grok Bot | `hermes import-agent grok-bot` | an export the Bot writes (`~/Downloads/grok-bot-export*.json`) |
+| OpenBot (nightly-labs/openbot desktop app) | `hermes import-agent openbot` | its data folder: `~/Library/Application Support/OpenBot`, `~/.config/OpenBot` or `%APPDATA%\OpenBot` |
 
 ## Install
 
@@ -120,6 +121,25 @@ Run it once per Bot into the profile that should own that Bot's work: `hermes -p
 grok-bot --source <file>`. An export carrying credential-looking keys is refused whole, and
 token-shaped strings inside text are replaced with `[redacted]`. Re-running skips routines whose cron
 job already exists. Grok exports are one-off files, so they are not part of `--sync`.
+
+## OpenBot
+
+`hermes import-agent openbot` reads the OpenBot desktop app's database (`openbot.db` in its data
+folder, opened read-only, so OpenBot can stay running) and each agent's workspace under
+`~/OpenBot/Agents`. Every agent imports into the active profile; `--bot <name>` picks agents, and
+`hermes -p <profile> import-agent openbot --bot <name>` gives one agent its own profile.
+
+| OpenBot | Hermes |
+|---|---|
+| Routine (hourly, daily, weekdays, weekly, monthly, interval, advanced, custom cron, one-time) | Cron job `<agent>: <routine>` with the same schedule and time zone, **created paused** (`--activate-routines` to create running) |
+| Routine with no schedule (run by hand, a script or a webhook) | Listed in `openbot-import/<agent>-event-routines.md` |
+| Agent description (its role) | `SOUL.md` when it still holds Hermes' default and one agent is imported, else memory entries |
+| Agent memories | Memory entries in `memories/MEMORY.md` |
+| Workspace skills (`.agents/skills`, `.claude/skills`) | `skills/openbot-imports/<name>/` (OpenBot's bundled skills stay behind) |
+| MCP servers | `mcp_servers` in `config.yaml`, secret-looking env vars and headers stripped and listed |
+
+Chats, provider accounts, channels and the browser profile are not imported. OpenBot keeps running
+its routines until you turn them off, so turn each off there, then `hermes cron resume <id>`.
 
 ## What maps where (Claude Code, Codex CLI, Cursor)
 

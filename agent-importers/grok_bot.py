@@ -239,7 +239,7 @@ class GrokBotImporter(AgentImporter):
         if self.bot_names:
             bots = [(p, b) for p, b in bots if str(b.get("name")).strip().lower() in self.bot_names]
             if not bots:
-                self.record("export", None, None, "skipped", "No bot in the export matches --bot")
+                self.record("export", None, None, "skipped", "No bot or agent matches --bot")
         for path, bot in bots:
             self._import_bot(path, bot, single=len(bots) == 1)
         return self.build_report()
@@ -273,7 +273,7 @@ class GrokBotImporter(AgentImporter):
 
     def _merge_list(self, kind: str, source: str, destination: Path, entries: list[str]) -> None:
         if not entries:
-            self.record(kind, source, destination, "skipped", f"No {kind.replace('-', ' ')} in the export")
+            self.record(kind, source, destination, "skipped", f"No {kind.replace('-', ' ')} found")
             return
         self.merge_memory_entries(kind, source, destination, entries)
 
@@ -284,7 +284,7 @@ class GrokBotImporter(AgentImporter):
         product = self.PRODUCT
         instructions = str(bot.get("instructions") or "").strip()
         if not instructions:
-            self.record("role", source, None, "skipped", "No instructions in the export")
+            self.record("role", source, None, "skipped", "No instructions found")
             return
         soul = self.target_root / "SOUL.md"
         current = read_text(soul) if soul.is_file() else ""
@@ -306,7 +306,7 @@ class GrokBotImporter(AgentImporter):
         root = self.target_root / "skills" / self.SKILL_CATEGORY
         mapped: dict[str, str] = {}
         if not skills:
-            self.record("skills", source, root, "skipped", "No skills in the export")
+            self.record("skills", source, root, "skipped", "No skills found")
             return mapped
         for skill in skills:
             label = str(skill.get("name") or "").strip()
@@ -339,7 +339,7 @@ class GrokBotImporter(AgentImporter):
     def _import_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]],
                          skills: dict[str, str]) -> None:
         if not routines:
-            self.record("routines", source, None, "skipped", "No routines in the export")
+            self.record("routines", source, None, "skipped", "No routines found")
             return
         from cron import jobs as cron_jobs
         unscheduled: list[dict[str, Any]] = []

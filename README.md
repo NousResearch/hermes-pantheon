@@ -161,8 +161,8 @@ Catalog entries come in two tiers:
 <a href="agent-importers/"><img src="assets/agent-importers.jpg" alt="Agent Importers plugin"></a>
 <h3><a href="agent-importers/">Agent Importers</a></h3>
 <code>hermes plugins install agent-importers</code>
-<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI, Cursor or Grok Bot setup into Hermes in one command (Grok Bot routines become Hermes cron jobs): instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
-<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor|grok-bot]</code></p>
+<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI, Cursor, Grok Bot or OpenBot setup into Hermes in one command (Grok Bot and OpenBot routines become Hermes cron jobs): instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
+<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor|grok-bot|openbot]</code></p>
 </td>
 <td width="50%" valign="top">
 <a href="mcp-serve/"><img src="assets/mcp-serve.jpg" alt="MCP Serve plugin"></a>

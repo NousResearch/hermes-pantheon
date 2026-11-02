@@ -8,7 +8,7 @@ description: >
   `hermes import-agent`: import an OpenClaw (~/.openclaw), Claude Code (~/.claude), Codex CLI
   (~/.codex), Cursor (~/.cursor) or Grok Bot setup into Hermes in one command. Grok Bot routines
   become cron jobs (created paused), its skills and memories come along, from an export the Bot
-  writes itself. Instructions, Cursor rules
+  writes itself. OpenBot (desktop) agents come over from its local database the same way. Instructions, Cursor rules
   and memories become memory entries, Bash permission rules
   become command allow/deny lists, MCP servers land in config.yaml, and skills are copied.
   Always previews first; API keys and credentials are never imported, except OpenClaw's
