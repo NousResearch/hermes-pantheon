@@ -1,6 +1,6 @@
 [project]
 name = "hermes-agent-importers"
-version = "1.1.0"
+version = "1.2.0"
 description = "hermes import-agent: import OpenClaw, Claude Code, Codex CLI and Cursor setups into Hermes Agent (official plugin; keeps the hermes claw spelling)"
 readme = "README.md"
 license = { text = "MIT" }
