@@ -17,6 +17,8 @@ Settings live in ``delegation.backends.model_map`` of config.yaml::
               model: claude-opus-5
               reasoning_effort: high
               service_tier: fast            # optional; core refuses the spawn if the route has no fast tier
+              max_iterations: 60            # optional; turn limit for this route's children
+              child_timeout_seconds: 300    # optional; idle timeout for this route's children
             - name: local
               description: Private; runs on this machine.
               base_url: http://localhost:8080/v1
@@ -43,6 +45,9 @@ SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "option"
 #: Entry keys copied into the route (same meaning as the matching core route fields).
 ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
+#: Per-route budget keys forwarded as written: a turn limit and an idle timeout for this route's children,
+#: overriding ``delegation.max_iterations`` / ``delegation.child_timeout_seconds``. Core owns the rules.
+ROUTE_LIMITS = ("max_iterations", "child_timeout_seconds")
 _warned: set[str] = set()
 
 
@@ -96,6 +101,12 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
                  if isinstance(entry.get(key), str) and entry[key].strip()}
         if isinstance(entry.get("fallback_providers"), list):
             route["fallback_providers"] = list(entry["fallback_providers"])
+        for limit in ROUTE_LIMITS:
+            value = entry.get(limit)
+            if isinstance(value, str):
+                value = value.strip()  # the web save path treats a whitespace-only value as blank; so does this
+            if value not in (None, ""):
+                route[limit] = value  # core validates it and refuses a bad value for that task
         options[name] = {"description": _text(entry, "description"), "route": route}
     return options
 

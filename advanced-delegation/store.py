@@ -192,13 +192,18 @@ def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]
 # --- display ----------------------------------------------------------------------------------
 
 def route_summary(route: Mapping[str, Any]) -> str:
-    """``provider · model [· reasoning X] [· tier]`` for one route."""
+    """``provider · model [· reasoning X] [· tier] [· N turns] [· N s idle]`` for one route."""
     where = _text(route.get("provider")) or _text(route.get("base_url"))
     parts = [where, _text(route.get("model"))]
     if _text(route.get("reasoning_effort")):
         parts.append(f"reasoning {_text(route.get('reasoning_effort'))}")
     if _text(route.get("service_tier")) and _text(route.get("service_tier")) != "normal":
         parts.append(_text(route.get("service_tier")))
+    # The editor never asks about the budget keys but keeps them, so the list must show what it keeps.
+    if route.get("max_iterations") not in (None, ""):
+        parts.append(f"{route['max_iterations']} turns")
+    if route.get("child_timeout_seconds") not in (None, ""):
+        parts.append(f"{route['child_timeout_seconds']} s idle")
     return " · ".join(p for p in parts if p)
 
 

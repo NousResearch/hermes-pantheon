@@ -18,6 +18,10 @@ import sys
 from typing import Any, Mapping, Optional
 
 from . import store
+from .model_map import ROUTE_LIMITS
+
+#: Stored route keys the editor never asks about but keeps through any edit (the rest survive only a same-endpoint edit).
+_KEPT_ON_ANY_EDIT = ("fallback_providers", *ROUTE_LIMITS)
 
 _NO_TTY = ("`hermes delegation config` needs an interactive terminal to edit routes.\n"
            "Print the current setup with `hermes delegation config --show`, or set keys directly with\n"
@@ -218,11 +222,12 @@ def _edit_route(existing: Mapping[str, Any], others: list[dict[str, Any]]) -> Op
         print("Route not saved.")
         return None
     route = {"name": name, "description": description, **where}
-    # Keys this editor does not ask about (fallback_providers, ...) survive an edit of the same endpoint.
+    # Keys this editor does not ask about (fallback_providers, ...) survive an edit of the same endpoint; the
+    # fallback chain and the route's budget keys are not about the endpoint, so they survive any edit.
     same_endpoint = where.get("provider", "") == _text(existing.get("provider")) and \
         where.get("base_url", "") == _text(existing.get("base_url"))
     for key, value in existing.items():
-        if key not in route and key not in store.ROUTE_KEYS and (same_endpoint or key == "fallback_providers"):
+        if key not in route and key not in store.ROUTE_KEYS and (same_endpoint or key in _KEPT_ON_ANY_EDIT):
             route[key] = value
     _pick_effort(route, _text(existing.get("reasoning_effort")))
     _pick_tier(route, _text(existing.get("service_tier")))

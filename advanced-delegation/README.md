@@ -148,6 +148,8 @@ delegation:
           model: claude-opus-5
           reasoning_effort: high
           service_tier: fast             # optional speed tier: normal, fast or ultrafast
+          max_iterations: 60             # optional turn limit for this route's subagents
+          child_timeout_seconds: 300     # optional idle timeout (seconds) for this route's subagents
         - name: local
           description: "Private: runs on this machine."
           base_url: http://localhost:8080/v1
@@ -156,14 +158,21 @@ delegation:
 ```
 
 Route keys: `name` and `description` (required), `model` (required), `provider` and/or `base_url`
-(at least one), and optionally `reasoning_effort`, `service_tier`, `fallback_providers`, `api_key`
-and `api_mode`, each meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
+(at least one), and optionally `reasoning_effort`, `service_tier`, `fallback_providers`, `api_key`,
+`api_mode`, `max_iterations` and `child_timeout_seconds`, each meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
 credentials stay in `.env` / `auth.json`, while an `api_key` here is stored in `config.yaml` in plain
 text. Malformed routes and repeated names are skipped with a warning in `hermes logs`.
 
 `service_tier` is checked like `/fast` against the route (and, for `ultrafast`, your Codex
 account): a tier the route does not offer refuses the spawn with a tool error instead of silently
 running at another tier. An unknown `reasoning_effort` is refused the same way.
+
+`max_iterations` (a whole number of 1 or more) and `child_timeout_seconds` (a number of 0 or more;
+`0` disables the idle timeout, values under 30 are raised to 30) give this route's subagents their own
+budget, overriding `delegation.max_iterations` / `delegation.child_timeout_seconds` — a cheap "scout"
+route can get 5 turns while a coding route keeps 60. A bad value refuses that task alone; the other
+tasks in the batch still run. Needs a Hermes core that reads the two keys (`ROUTE_KEYS` in
+`agent/delegation_provider.py`); older cores ignore them.
 
 ### Profile routes (`profile_routes`)
 
