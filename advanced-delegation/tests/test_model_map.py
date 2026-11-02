@@ -155,9 +155,16 @@ def test_a_bad_limit_is_passed_through_for_core_to_refuse_not_hidden(provider, b
 
 def test_a_blank_limit_is_omitted_like_an_absent_one(provider):
     config = _config(options=[{"name": "scout", "description": "d", "provider": "openrouter", "model": "m",
-                               "max_iterations": "", "child_timeout_seconds": None}])
+                               "max_iterations": "  ", "child_timeout_seconds": None}])
     route = provider.route_task({"goal": "g", "index": 0, "option": "scout"}, config)
     assert "max_iterations" not in route and "child_timeout_seconds" not in route
+
+
+def test_route_summary_shows_the_budget_the_editor_keeps():
+    from advanced_delegation_plugin.store import route_summary
+    assert route_summary({"provider": "openrouter", "model": "m", "max_iterations": 5, "child_timeout_seconds": 120}) \
+        == "openrouter · m · 5 turns · 120 s idle"
+    assert route_summary({"provider": "openrouter", "model": "m"}) == "openrouter · m"
 
 
 def test_task_without_option_runs_on_the_parent_route_not_delegation_model(provider):

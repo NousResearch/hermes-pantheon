@@ -102,8 +102,11 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
         if isinstance(entry.get("fallback_providers"), list):
             route["fallback_providers"] = list(entry["fallback_providers"])
         for limit in ROUTE_LIMITS:
-            if entry.get(limit) not in (None, ""):
-                route[limit] = entry[limit]  # core validates it and refuses a bad value for that task
+            value = entry.get(limit)
+            if isinstance(value, str):
+                value = value.strip()  # the web save path treats a whitespace-only value as blank; so does this
+            if value not in (None, ""):
+                route[limit] = value  # core validates it and refuses a bad value for that task
         options[name] = {"description": _text(entry, "description"), "route": route}
     return options
 
