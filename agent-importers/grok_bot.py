@@ -23,6 +23,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -208,12 +209,20 @@ def _skill_markdown(skill: dict[str, Any]) -> str:
 
 
 class GrokBotImporter(AgentImporter):
-    """Plan/apply a Grok Bot export into one Hermes home; same item records as the other importers."""
+    """Plan/apply a Grok Bot export into one Hermes home; same item records as the other importers.
+
+    Works on normalized bot dicts (the export's shape), so another product's reader (OpenBot) only
+    overrides :meth:`load_bots`. A skill may carry ``path`` (a folder with ``SKILL.md``, copied) instead
+    of ``instructions``; a bot may carry ``mcp_servers`` (Claude/Codex-shaped entries)."""
+
+    AGENT = AGENT
+    PRODUCT = "Grok Bot"
+    SKILL_CATEGORY = SKILL_CATEGORY
 
     def __init__(self, export_files: Sequence[Path], target_root: Path, execute: bool = False,
                  overwrite: bool = False, activate_routines: bool = False,
                  bot_names: Sequence[str] = ()) -> None:
-        self.agent = AGENT
+        self.agent = self.AGENT
         self.source_root = Path(export_files[0]).parent if export_files else Path.home()
         self.export_files = [Path(p) for p in export_files]
         self.target_root = Path(target_root)
@@ -226,6 +235,17 @@ class GrokBotImporter(AgentImporter):
         self.stripped_secrets: list[str] = []
 
     def run(self) -> dict[str, Any]:
+        bots = self.load_bots()
+        if self.bot_names:
+            bots = [(p, b) for p, b in bots if str(b.get("name")).strip().lower() in self.bot_names]
+            if not bots:
+                self.record("export", None, None, "skipped", "No bot in the export matches --bot")
+        for path, bot in bots:
+            self._import_bot(path, bot, single=len(bots) == 1)
+        return self.build_report()
+
+    def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
+        """(where it came from, normalized bot) for every bot in the sources; problems are recorded."""
         bots: list[tuple[Path, dict[str, Any]]] = []
         for path in self.export_files:
             try:
@@ -236,13 +256,7 @@ class GrokBotImporter(AgentImporter):
             if redacted:
                 self.stripped_secrets.append(f"{path.name}: {redacted} token-like value(s) redacted")
             bots.extend((path, bot) for bot in parsed)
-        if self.bot_names:
-            bots = [(p, b) for p, b in bots if str(b.get("name")).strip().lower() in self.bot_names]
-            if not bots:
-                self.record("export", None, None, "skipped", "No bot in the export matches --bot")
-        for path, bot in bots:
-            self._import_bot(path, bot, single=len(bots) == 1)
-        return self.build_report()
+        return bots
 
     def _import_bot(self, path: Path, bot: dict[str, Any], single: bool) -> None:
         name = str(bot["name"]).strip()
@@ -254,6 +268,8 @@ class GrokBotImporter(AgentImporter):
         imported_skills = self._import_skills(source, _dicts(bot.get("skills")))
         self._import_routines(source, name, _dicts(bot.get("routines")), imported_skills)
         self._import_apps(source, _dicts(bot.get("apps")))
+        if isinstance(bot.get("mcp_servers"), dict) and bot["mcp_servers"]:
+            self.import_mcp_servers(bot["mcp_servers"], kind="mcp-servers")
 
     def _merge_list(self, kind: str, source: str, destination: Path, entries: list[str]) -> None:
         if not entries:
@@ -265,6 +281,7 @@ class GrokBotImporter(AgentImporter):
         """The Bot's role becomes SOUL.md while that is still Hermes' seeded default and only one Bot
         is imported; otherwise its lines join the memory entries."""
         name, title = str(bot["name"]).strip(), str(bot.get("title") or "").strip()
+        product = self.PRODUCT
         instructions = str(bot.get("instructions") or "").strip()
         if not instructions:
             self.record("role", source, None, "skipped", "No instructions in the export")
@@ -276,24 +293,25 @@ class GrokBotImporter(AgentImporter):
 
             def write() -> None:
                 if current.strip():
-                    atomic_write_text(soul.with_suffix(".md.bak.grok-bot"), current)
+                    atomic_write_text(soul.with_suffix(f".md.bak.{self.AGENT}"), current)
                 atomic_write_text(soul, f"{heading}\n\n{instructions}\n")
 
             self.apply("role", source, soul, "Would write the Bot's role to SOUL.md", write)
             return
-        entries = [f"Grok Bot {name}: {e}" for e in extract_markdown_entries(instructions)]
+        entries = [f"{product} {name}: {e}" for e in extract_markdown_entries(instructions)]
         self.merge_memory_entries("role", source, self.target_root / "memories" / "MEMORY.md", entries)
 
     def _import_skills(self, source: str, skills: list[dict[str, Any]]) -> dict[str, str]:
         """Write each skill; returns export skill name (lowercased) → imported Hermes skill name."""
-        root = self.target_root / "skills" / SKILL_CATEGORY
+        root = self.target_root / "skills" / self.SKILL_CATEGORY
         mapped: dict[str, str] = {}
         if not skills:
             self.record("skills", source, root, "skipped", "No skills in the export")
             return mapped
         for skill in skills:
             label = str(skill.get("name") or "").strip()
-            if not label or not str(skill.get("instructions") or "").strip():
+            folder = Path(skill["path"]) if skill.get("path") else None
+            if not label or not (folder or str(skill.get("instructions") or "").strip()):
                 self.record("skill", f"{source} / {label or '?'}", None, "skipped",
                             "Skill has no name or no instructions")
                 continue
@@ -304,13 +322,17 @@ class GrokBotImporter(AgentImporter):
                             "Destination skill already exists")
                 mapped[label.lower()] = slug
                 continue
-            text = _skill_markdown(skill)
-
-            def write(destination=destination, text=text) -> None:
+            def write(destination=destination, skill=skill, folder=folder) -> None:
+                if folder is not None:
+                    if destination.exists():
+                        shutil.rmtree(destination)
+                    shutil.copytree(folder, destination, ignore=shutil.ignore_patterns(".openbot-managed.json"))
+                    return
                 destination.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(destination / "SKILL.md", text)
+                atomic_write_text(destination / "SKILL.md", _skill_markdown(skill))
 
-            self.apply("skill", f"{source} / {label}", destination, "Would write SKILL.md", write)
+            self.apply("skill", f"{source} / {label}", destination,
+                       "Would copy skill directory" if folder else "Would write SKILL.md", write)
             mapped[label.lower()] = slug
         return mapped
 
@@ -341,7 +363,7 @@ class GrokBotImporter(AgentImporter):
                     continue
                 job_skills = [skills[s.lower()] for s in _strings(routine.get("skills")) if s.lower() in skills]
                 paused = not self.activate_routines or bool(routine.get("paused"))
-                kwargs = _create_job_kwargs(cron_jobs.create_job, routine, paused)
+                kwargs = _create_job_kwargs(cron_jobs.create_job, routine, paused, self.PRODUCT)
 
                 details: dict[str, Any] = {"schedule": schedule, "paused": paused, "skills": job_skills}
 
@@ -361,8 +383,8 @@ class GrokBotImporter(AgentImporter):
     def _note_event_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]]) -> None:
         """Event-triggered routines have no cron equivalent: keep their full text where the user can
         rebuild them (a webhook subscription, a gateway channel, or a polling cron job)."""
-        destination = self.target_root / "grok-bot-import" / f"{_slug(bot_name)}-event-routines.md"
-        lines = [f"# {bot_name}: Grok Bot routines that run on an event", "",
+        destination = self.target_root / f"{self.AGENT}-import" / f"{_slug(bot_name)}-event-routines.md"
+        lines = [f"# {bot_name}: {self.PRODUCT} routines that run on an event", "",
                  "These start on something happening instead of a schedule, so they were not turned into "
                  "cron jobs. Recreate each in Hermes (ask Hermes to set it up from this file).", ""]
         for r in routines:
@@ -388,7 +410,7 @@ class GrokBotImporter(AgentImporter):
                   if _slug(str(a.get("name"))) not in servers and str(a.get("name") or "").strip()]
         if others:
             self.record("apps", source, None, "skipped",
-                        "Connect these in Hermes yourself (their logins stay in Grok Bot): " + ", ".join(others))
+                        f"Connect these in Hermes yourself (their logins stay in {self.PRODUCT}): " + ", ".join(others))
 
 
 def _is_seeded_soul(text: str) -> bool:
@@ -416,12 +438,12 @@ def _routine_schedule(routine: dict[str, Any], parse_schedule) -> Optional[str]:
     return None
 
 
-def _create_job_kwargs(create_job, routine: dict[str, Any], paused: bool) -> dict[str, Any]:
+def _create_job_kwargs(create_job, routine: dict[str, Any], paused: bool, product: str) -> dict[str, Any]:
     """``paused`` always; the routine's time zone only where this Hermes can pin one per job (older
     releases schedule in the profile's zone)."""
     kwargs: dict[str, Any] = {"paused": paused}
     if paused:
-        kwargs["paused_reason"] = "Imported from Grok Bot: resume once the Grok routine is off"
+        kwargs["paused_reason"] = f"Imported from {product}: resume once the {product} routine is off"
     tz = str(routine.get("timezone") or "").strip()
     if tz and "timezone" in inspect.signature(create_job).parameters:
         kwargs["timezone"] = tz

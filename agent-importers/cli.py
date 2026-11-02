@@ -14,11 +14,11 @@ from .importer import AGENT_DEFAULT_DIRS, SUPPORTED_AGENTS, AgentImporter, detec
 
 logger = logging.getLogger(__name__)
 
-HELP = "Import an OpenClaw, Claude Code, Codex CLI, Cursor or Grok Bot setup into Hermes"
+HELP = "Import an OpenClaw, Claude Code, Codex CLI, Cursor, Grok Bot or OpenBot setup into Hermes"
 DESCRIPTION = (
     "One-command import of another agent's setup into Hermes. Maps CLAUDE.md/AGENTS.md "
     "instructions, Cursor rules, permission allowlists, MCP servers, skills, and memories into their Hermes "
-    "equivalents; Grok Bot routines become cron jobs. Always shows a preview before making changes. "
+    "equivalents; Grok Bot and OpenBot routines become cron jobs. Always shows a preview before making changes. "
     "API keys and credentials are "
     "never imported — run 'hermes setup' for those. OpenClaw (the former 'hermes claw migrate') "
     "imports allowlisted secrets only with --migrate-secrets.")
@@ -28,8 +28,9 @@ CLAW_DESCRIPTION = ("Migrate settings, memories, skills, and API keys from OpenC
 
 OPENCLAW = "openclaw"
 GROK_BOT = "grok-bot"
-# Flags only `import-agent grok-bot` understands, as (dest, value meaning "not passed").
-_GROK_ONLY_FLAGS = (("activate_routines", False), ("bot", None))
+OPENBOT = "openbot"
+# Flags only the routine-carrying importers (grok-bot, openbot) understand, as (dest, "not passed").
+_ROUTINE_FLAGS = (("activate_routines", False), ("bot", None))
 # Flags only `import-agent openclaw` understands, as (dest, value meaning "not passed").
 _OPENCLAW_ONLY_FLAGS = (("preset", None), ("migrate_secrets", False), ("no_backup", False),
                         ("workspace_target", None), ("skill_conflict", None))
@@ -74,11 +75,12 @@ def add_openclaw_migrate_flags(parser, *, defaults: bool) -> None:
 def setup_cli(parser) -> None:
     """Attach the ``import-agent`` arguments (same spelling core shipped)."""
     parser.add_argument(
-        "agent", nargs="?", choices=[OPENCLAW, *SUPPORTED_AGENTS, GROK_BOT],
+        "agent", nargs="?", choices=[OPENCLAW, *SUPPORTED_AGENTS, GROK_BOT, OPENBOT],
         help=f"Which agent to import from (default: auto-detect {_dirs_hint()})")
     parser.add_argument(
         "--source", help=f"Path to the agent's config directory (default: {_dirs_hint()}); for "
-                         "grok-bot, the export file the Bot wrote (or a folder of them)")
+                         "grok-bot, the export file the Bot wrote (or a folder of them); for openbot, its user "
+                         "data folder (the one holding openbot.db)")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Preview only — stop after showing what would be imported")
@@ -96,11 +98,11 @@ def setup_cli(parser) -> None:
     add_openclaw_migrate_flags(parser, defaults=False)
     parser.add_argument(
         "--activate-routines", action="store_true",
-        help="Grok Bot: create the imported cron jobs active (default: paused, so they don't run "
-             "alongside the Grok copies until you turn those off)")
+        help="Grok Bot / OpenBot: create the imported cron jobs active (default: paused, so they "
+             "don't run alongside the originals until you turn those off)")
     parser.add_argument(
         "--bot", action="append", metavar="NAME",
-        help="Grok Bot: import only this Bot from an export holding several (repeatable)")
+        help="Grok Bot / OpenBot: import only this Bot or agent, by name (repeatable)")
 
 
 def handle_cli(args) -> None:
@@ -144,9 +146,10 @@ def _resolve_agent(args) -> Optional[str]:
     if args.agent:
         return args.agent
     from .grok_bot import detect_grok_bot
+    from .openbot import find_user_data
     from .openclaw import _find_openclaw_dirs
     detected = (([OPENCLAW] if _find_openclaw_dirs() else []) + detect_agents()
-                + ([GROK_BOT] if detect_grok_bot() else []))
+                + ([GROK_BOT] if detect_grok_bot() else []) + ([OPENBOT] if find_user_data() else []))
     if not detected:
         print()
         print_error(f"No supported agent setup found ({_dirs_hint()}).")
@@ -184,12 +187,12 @@ def import_agent_command(args) -> None:
         from .openclaw import migrate_command
         migrate_command(args)
         return
-    for owner, label, flags in ((OPENCLAW, "OpenClaw", _OPENCLAW_ONLY_FLAGS),
-                                (GROK_BOT, "Grok Bot", _GROK_ONLY_FLAGS)):
-        if agent != owner and (passed := _flags_passed(args, flags)):
+    for owners, label, flags in (((OPENCLAW,), "OpenClaw", _OPENCLAW_ONLY_FLAGS),
+                                 ((GROK_BOT, OPENBOT), "Grok Bot and OpenBot", _ROUTINE_FLAGS)):
+        if agent not in owners and (passed := _flags_passed(args, flags)):
             print()
             print_error(f"{', '.join(passed)} only apply to {label} imports; nothing was imported.")
-            print_info(f"Use them with: hermes import-agent {owner} {' '.join(passed)} ...")
+            print_info(f"Use them with: hermes import-agent {owners[0]} {' '.join(passed)} ...")
             return
     explicit_source, overwrite = args.source, args.overwrite
     from_setup = getattr(args, "from_setup", False)
@@ -206,6 +209,21 @@ def import_agent_command(args) -> None:
             return GrokBotImporter(export_files, hermes_home.resolve(), execute=execute,
                                    overwrite=overwrite, activate_routines=args.activate_routines,
                                    bot_names=args.bot or ())
+    elif agent == OPENBOT:
+        from .openbot import OpenBotImporter, find_user_data
+        _print_banner()
+        user_data = find_user_data(Path(explicit_source).expanduser() if explicit_source else None)
+        if user_data is None:
+            print()
+            print_error("OpenBot's data folder (with openbot.db) was not found"
+                        + (f" at {explicit_source}" if explicit_source else "") + ".")
+            print_info("Point at it: hermes import-agent openbot --source '<OpenBot user data folder>'")
+            return
+        source_label = str(user_data)
+
+        def make_importer(execute: bool):
+            return OpenBotImporter(user_data, hermes_home.resolve(), execute=execute, overwrite=overwrite,
+                                   activate_routines=args.activate_routines, bot_names=args.bot or ())
     else:
         source_dir = Path(explicit_source or Path.home() / AGENT_DEFAULT_DIRS[agent])
         _print_banner()
@@ -272,8 +290,8 @@ def import_agent_command(args) -> None:
     if report is None:
         return
     print_import_report(report, dry_run=False, from_setup=from_setup)
-    if agent == GROK_BOT:
-        _print_grok_next_steps(report)
+    if agent in (GROK_BOT, OPENBOT):
+        _print_routine_next_steps(report, "Grok Bot" if agent == GROK_BOT else "OpenBot")
     else:
         _register_for_sync(agent, source_dir, hermes_home, overwrite, report)
     print()
@@ -292,15 +310,15 @@ def _print_banner() -> None:
     print(_color("└─────────────────────────────────────────────────────────┘", "magenta"))
 
 
-def _print_grok_next_steps(report: dict[str, Any]) -> None:
-    """Grok exports are one-off files, so they are not sync sources; say how to switch over."""
+def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
+    """Grok and OpenBot imports are one-off (not sync sources); say how to switch the routines over."""
     from hermes_cli.cli_output import print_info
     jobs = [i for i in report.get("items", []) if i.get("kind") == "routine" and i.get("status") == "imported"]
     paused = [i for i in jobs if i.get("paused")]
     if paused:
         print()
         print_info(f"{len(paused)} routine(s) were created PAUSED so they don't run twice. Once you turn "
-                   "the routine off in Grok Bot, resume its copy here:")
+                   f"the routine off in {product}, resume its copy here:")
         for item in paused:
             print_info(f"  hermes cron resume {item.get('job_id')}    # {item.get('destination')}")
     if jobs:
